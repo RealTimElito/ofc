@@ -209,6 +209,18 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ stage, with_critique }),
     }),
+  generateStatus: (id: number) =>
+    request<{
+      report_id: number;
+      status: string;
+      active: boolean;
+      cancel_requested: boolean;
+    }>(`/api/reports/${id}/generate-status`),
+  cancelGenerate: (id: number) =>
+    request<{ ok: boolean; report_id: number; status: string; cancel_requested: boolean }>(
+      `/api/reports/${id}/cancel`,
+      { method: "POST" },
+    ),
   listReportRuns: (id: number, opts?: { limit?: number; errorsOnly?: boolean }) => {
     const params = new URLSearchParams();
     if (opts?.limit != null) params.set("limit", String(opts.limit));

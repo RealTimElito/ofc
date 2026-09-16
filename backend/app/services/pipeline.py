@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -17,6 +18,10 @@ from app.services.style_cache import (
     load_style_notes,
     save_style_notes,
 )
+
+
+class GenerationCancelled(Exception):
+    """Raised when a background generate is cancelled between stages."""
 
 
 STYLE_NOTES_PROMPT = """You analyze example reports to extract reusable *writing style* signals.
@@ -380,9 +385,16 @@ def strip_example_bleed(body: str, examples: str, *, allowed: str) -> str:
 
 
 class ReportPipeline:
-    def __init__(self, db: Session, project: ReportProject):
+    def __init__(
+        self,
+        db: Session,
+        project: ReportProject,
+        *,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ):
         self.db = db
         self.project = project
+        self._cancel_check = cancel_check or (lambda: False)
         self.client = self._make_client()
         self.pack = build_context_pack(
             db,
@@ -394,6 +406,14 @@ class ReportPipeline:
             brief=project.brief,
             title=project.title,
         )
+
+    def _raise_if_cancelled(self, stage: str) -> None:
+        if not self._cancel_check():
+            return
+        self.project.status = "cancelled"
+        self.db.commit()
+        self._log_run(stage, "cancelled", "cancelled by user")
+        raise GenerationCancelled(stage)
 
     def _make_client(self) -> LlmClient:
         if self.project.llm_profile_id:
@@ -455,6 +475,7 @@ class ReportPipeline:
 
     async def run_style_notes(self, *, force: bool = False) -> str:
         """Extract reusable formulation signals from attached examples."""
+        self._raise_if_cancelled("style_notes")
         if not has_real_examples(self.pack["examples"]):
             self.project.style_notes_md = ""
             self.project.style_notes_key = ""
@@ -475,6 +496,7 @@ class ReportPipeline:
             if cached:
                 return self._apply_style_notes(cached, key, from_cache=True)
 
+        prior_status = self.project.status or "draft"
         self.project.status = "style_notes"
         self.db.commit()
         prompt = STYLE_NOTES_PROMPT.format(examples=self.pack["examples"])
@@ -482,7 +504,26 @@ class ReportPipeline:
             notes = await self.client.chat(prompt, temperature=0.2)
             cleaned = sanitize_style_notes(notes, self.pack["examples"])
             save_style_notes(settings.style_cache_dir, key, cleaned)
-            return self._apply_style_notes(cleaned, key, from_cache=False)
+            result = self._apply_style_notes(cleaned, key, from_cache=False)
+            # Standalone style_notes should not leave the sticky in-progress label.
+            in_flight = {
+                "queued",
+                "style_notes",
+                "outlining",
+                "drafting",
+                "critiquing",
+                "revising",
+            }
+            if self.project.status == "style_notes":
+                if prior_status not in in_flight:
+                    self.project.status = prior_status
+                    self.db.commit()
+                elif force and prior_status == "queued":
+                    self.project.status = (
+                        "ready" if (self.project.body_md or "").strip() else "draft"
+                    )
+                    self.db.commit()
+            return result
         except Exception as exc:  # noqa: BLE001
             self.project.status = "error"
             self.db.commit()
@@ -501,7 +542,9 @@ class ReportPipeline:
         return await self.run_style_notes(force=False)
 
     async def run_outline(self) -> str:
+        self._raise_if_cancelled("outline")
         await self.ensure_style_notes()
+        self._raise_if_cancelled("outline")
         self.project.status = "outlining"
         self.db.commit()
         prompt = OUTLINE_PROMPT.format(
@@ -522,10 +565,12 @@ class ReportPipeline:
             raise
 
     async def run_draft(self) -> str:
+        self._raise_if_cancelled("draft")
         if not self.project.outline_md.strip():
             await self.run_outline()
         else:
             await self.ensure_style_notes()
+        self._raise_if_cancelled("draft")
         self.project.status = "drafting"
         self.db.commit()
         prompt = DRAFT_PROMPT.format(
@@ -547,10 +592,12 @@ class ReportPipeline:
             raise
 
     async def run_critique(self) -> str:
+        self._raise_if_cancelled("critique")
         if not self.project.body_md.strip():
             await self.run_draft()
         else:
             await self.ensure_style_notes()
+        self._raise_if_cancelled("critique")
         self.project.status = "critiquing"
         self.db.commit()
         prompt = CRITIQUE_PROMPT.format(
@@ -574,10 +621,12 @@ class ReportPipeline:
             raise
 
     async def run_revise(self) -> str:
+        self._raise_if_cancelled("revise")
         if not self.project.critique_md.strip():
             await self.run_critique()
         else:
             await self.ensure_style_notes()
+        self._raise_if_cancelled("revise")
         self.project.status = "revising"
         self.db.commit()
         prompt = REVISE_PROMPT.format(
@@ -603,11 +652,16 @@ class ReportPipeline:
             raise
 
     async def run_full(self, with_critique: bool = True) -> ReportProject:
+        self._raise_if_cancelled("full")
         await self.run_style_notes(force=False)
+        self._raise_if_cancelled("full")
         await self.run_outline()
+        self._raise_if_cancelled("full")
         await self.run_draft()
         if with_critique:
+            self._raise_if_cancelled("full")
             await self.run_critique()
+            self._raise_if_cancelled("full")
             await self.run_revise()
         else:
             self.project.status = "ready"

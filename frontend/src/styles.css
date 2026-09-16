@@ -359,6 +359,7 @@ th {
   line-height: 1.4;
 }
 
+.status.queued,
 .status.style_notes,
 .status.outlining,
 .status.drafting,
@@ -366,6 +367,11 @@ th {
 .status.revising {
   background: color-mix(in srgb, var(--accent) 12%, white);
   color: var(--accent-deep);
+}
+
+.status.cancelled {
+  background: color-mix(in srgb, #888 14%, white);
+  color: #555;
 }
 
 .field-hint {

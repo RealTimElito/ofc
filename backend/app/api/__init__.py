@@ -49,8 +49,13 @@ from app.services.crypto import encrypt_secret
 from app.services.db_connector import run_query
 from app.services.docs import read_upload_text
 from app.services.export_docx import markdown_to_docx_bytes
+from app.services.generate_jobs import (
+    is_job_active,
+    job_snapshot,
+    request_cancel,
+    start_generate,
+)
 from app.services.llm import LlmClient, config_from_profile, config_from_settings
-from app.services.pipeline import ReportPipeline
 from app.services.theme import (
     empty_theme,
     extract_theme_from_docx,
@@ -770,31 +775,59 @@ def list_report_runs(
 async def generate_report(
     report_id: int, body: GenerateIn, db: Session = Depends(get_db)
 ):
+    """Start a background generate; poll GET report / generate-status for progress."""
     row = db.get(ReportProject, report_id)
     if not row:
         raise HTTPException(404, "Report not found")
-    pipe = ReportPipeline(db, row)
-    try:
-        if body.stage == "style_notes":
-            await pipe.run_style_notes(force=True)
-        elif body.stage == "outline":
-            await pipe.run_outline()
-        elif body.stage == "draft":
-            await pipe.run_draft()
-        elif body.stage == "critique":
-            await pipe.run_critique()
-        elif body.stage == "revise":
-            await pipe.run_revise()
-        elif body.stage == "full":
-            await pipe.run_full(with_critique=body.with_critique)
-        else:
-            raise HTTPException(400, "Unknown stage")
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(502, f"Generation failed: {exc}") from exc
+    stage = body.stage
+    if stage not in (
+        "style_notes",
+        "outline",
+        "draft",
+        "critique",
+        "revise",
+        "full",
+    ):
+        raise HTTPException(400, "Unknown stage")
+    if is_job_active(report_id):
+        raise HTTPException(409, "Generation already in progress for this report")
+    row.status = "queued"
+    db.commit()
+    if not start_generate(report_id, stage, with_critique=body.with_critique):
+        raise HTTPException(409, "Generation already in progress for this report")
     db.refresh(row)
     return _project_out(row)
+
+
+@router.get("/reports/{report_id}/generate-status")
+def generate_status(report_id: int, db: Session = Depends(get_db)):
+    """Whether a background generate is still running for this report."""
+    row = db.get(ReportProject, report_id)
+    if not row:
+        raise HTTPException(404, "Report not found")
+    snap = job_snapshot(report_id)
+    return {
+        "report_id": report_id,
+        "status": row.status,
+        "active": snap["active"],
+        "cancel_requested": snap["cancel_requested"],
+    }
+
+
+@router.post("/reports/{report_id}/cancel")
+def cancel_generate(report_id: int, db: Session = Depends(get_db)):
+    """Request cancel between pipeline stages (in-flight LLM call still finishes)."""
+    row = db.get(ReportProject, report_id)
+    if not row:
+        raise HTTPException(404, "Report not found")
+    if not request_cancel(report_id):
+        raise HTTPException(409, "No generation in progress for this report")
+    return {
+        "ok": True,
+        "report_id": report_id,
+        "status": row.status,
+        "cancel_requested": True,
+    }
 
 
 @router.get("/reports/{report_id}/context-preview")

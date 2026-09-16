@@ -82,8 +82,9 @@ export default function AboutPage() {
             </li>
           </ul>
           <p className="about-note">
-            “Full generate” runs style notes (if examples exist) plus the four writing stages. You
-            can also run stages one at a time from the editor.
+            “Full generate” runs style notes (if examples exist) plus the four writing stages in the
+            background so the editor stays responsive. Live stage status updates while it runs; you
+            can cancel between stages. You can also run stages one at a time from the editor.
           </p>
         </div>
 

@@ -45,6 +45,7 @@ const EMPTY_THEME: ReportTheme = {
 };
 
 const STAGE_LABELS: Record<string, string> = {
+  queued: "Queued",
   style_notes: "Extracting style notes",
   outlining: "Writing outline",
   outlined: "Outline ready",
@@ -55,6 +56,7 @@ const STAGE_LABELS: Record<string, string> = {
   revising: "Revising draft",
   ready: "Ready",
   error: "Stopped with an error",
+  cancelled: "Cancelled",
   draft: "Draft",
   done: "Done",
 };
@@ -125,6 +127,7 @@ export default function ReportEditorPage() {
   const [latestFinishedRun, setLatestFinishedRun] = useState<PipelineRun | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastErrorRun, setLastErrorRun] = useState<PipelineRun | null>(null);
+  const [cancelRequested, setCancelRequested] = useState(false);
   const [llmHealth, setLlmHealth] = useState<LlmHealth>("idle");
   const [llmHealthDetail, setLlmHealthDetail] = useState<string | null>(null);
   const [styleNotesStale, setStyleNotesStale] = useState(false);
@@ -215,6 +218,27 @@ export default function ReportEditorPage() {
     void checkLlm(report.llm_profile_id);
   }, [report?.id, report?.llm_profile_id]);
 
+  // Resume progress UI if a background generate is still running after refresh.
+  useEffect(() => {
+    if (!reportId || generating) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const snap = await api.generateStatus(reportId);
+        if (cancelled || !snap.active) return;
+        setGenerating(true);
+        setBusy(true);
+        setPipelineStatus(snap.status);
+        setCancelRequested(snap.cancel_requested);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [reportId, report?.status]);
+
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!pickerRef.current?.contains(e.target as Node)) setPickerOpen(false);
@@ -235,15 +259,37 @@ export default function ReportEditorPage() {
 
     async function pollProgress() {
       try {
-        const [r, runs] = await Promise.all([
+        const [r, runs, snap] = await Promise.all([
           api.getReport(reportId),
           api.listReportRuns(reportId, { limit: 5 }),
+          api.generateStatus(reportId),
         ]);
         if (cancelled) return;
         setPipelineStatus(r.status);
         setReport((prev) => (prev ? { ...prev, status: r.status } : prev));
+        setCancelRequested(snap.cancel_requested);
         const finished = runs.find((run) => run.status === "ok" || run.status === "skipped");
         setLatestFinishedRun(finished ?? null);
+
+        if (!snap.active) {
+          const full = await api.getReport(reportId);
+          if (cancelled) return;
+          setReport(normalizeReport(full));
+          setPipelineStatus(full.status);
+          setGenerating(false);
+          setBusy(false);
+          setCancelRequested(false);
+          if (full.status === "error") {
+            await loadLastErrorRun(full.id);
+          } else if (full.status === "cancelled") {
+            setError(null);
+            setLastErrorRun(null);
+          } else {
+            setLastErrorRun(null);
+            setStyleNotesStale(false);
+            await refreshStyleStale(full.id);
+          }
+        }
       } catch {
         /* keep last known progress while generate continues */
       }
@@ -404,8 +450,9 @@ export default function ReportEditorPage() {
     if (!confirmGenerateDespiteLlm(stage)) return;
     setBusy(true);
     setGenerating(true);
-    setPipelineStatus(report.status);
+    setPipelineStatus("queued");
     setLatestFinishedRun(null);
+    setCancelRequested(false);
     setError(null);
     setLastErrorRun(null);
     try {
@@ -421,18 +468,20 @@ export default function ReportEditorPage() {
         body_md: report.body_md,
         outline_md: report.outline_md,
       });
-      const updated = await api.generate(report.id, stage, true);
-      setReport(normalizeReport(updated));
-      setLastErrorRun(null);
-      setStyleNotesStale(false);
+      const started = await api.generate(report.id, stage, true);
+      setReport(normalizeReport(started));
+      setPipelineStatus(started.status);
       if (stage === "outline") setTab("outline");
       else if (stage === "critique") setTab("critique");
       else if (stage === "style_notes") setTab("style");
       else setTab("body");
-      await refreshStyleStale(updated.id);
+      // Completion is handled by the generate-status poller.
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
+      setGenerating(false);
+      setBusy(false);
+      setCancelRequested(false);
       try {
         const refreshed = await api.getReport(report.id);
         setReport(normalizeReport(refreshed));
@@ -440,9 +489,18 @@ export default function ReportEditorPage() {
       } catch {
         /* keep request error message */
       }
-    } finally {
-      setGenerating(false);
-      setBusy(false);
+    }
+  }
+
+  async function cancelGenerate() {
+    if (!report || !generating) return;
+    setCancelRequested(true);
+    setError(null);
+    try {
+      await api.cancelGenerate(report.id);
+    } catch (e) {
+      setCancelRequested(false);
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -579,8 +637,10 @@ export default function ReportEditorPage() {
             </span>
             {generating ? (
               <span className="pipeline-progress" role="status" aria-live="polite">
-                {stageProgressLabel(pipelineStatus ?? report.status)}
-                {latestFinishedRun
+                {cancelRequested
+                  ? " · cancelling after current stage…"
+                  : stageProgressLabel(pipelineStatus ?? report.status)}
+                {!cancelRequested && latestFinishedRun
                   ? ` · finished ${runStageLabel(latestFinishedRun.stage)}`
                   : ""}
               </span>
@@ -941,10 +1001,13 @@ export default function ReportEditorPage() {
             <p className="field-hint">Generate stages against your brief, examples, and context.</p>
             {generating && (
               <p className="pipeline-progress-banner" role="status" aria-live="polite">
-                {stageProgressLabel(pipelineStatus ?? report.status)}
-                {latestFinishedRun
-                  ? ` · last finished: ${runStageLabel(latestFinishedRun.stage)}`
-                  : " · starting…"}
+                {cancelRequested
+                  ? "Cancel requested — will stop after the current LLM stage finishes."
+                  : stageProgressLabel(pipelineStatus ?? report.status)}
+                {!cancelRequested &&
+                  (latestFinishedRun
+                    ? ` · last finished: ${runStageLabel(latestFinishedRun.stage)}`
+                    : " · starting…")}
               </p>
             )}
             <div className="row">
@@ -960,6 +1023,17 @@ export default function ReportEditorPage() {
               >
                 Full generate
               </button>
+              {generating ? (
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={cancelRequested}
+                  onClick={() => void cancelGenerate()}
+                  title="Stops between pipeline stages; the current LLM call still finishes"
+                >
+                  {cancelRequested ? "Cancelling…" : "Cancel"}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="secondary"
