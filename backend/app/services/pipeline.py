@@ -203,6 +203,31 @@ def _norm_claim_key(text: str) -> str:
     return _TRAIL_PUNCT.sub("", _norm_overlap_text(text))
 
 
+def _soft_subphrase_keys(
+    key: str, *, min_words: int = 3, min_len: int = 18
+) -> list[str]:
+    """Contiguous word n-grams from a claim — catch paraphrase soft-bleed."""
+    words = [w for w in (key or "").split() if w]
+    if not words:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    # Longer first so scrubbing prefers the most specific overlapping span.
+    for n in range(len(words), min_words - 1, -1):
+        for i in range(0, len(words) - n + 1):
+            chunk = " ".join(words[i : i + n])
+            if len(chunk) < min_len or chunk in seen:
+                continue
+            seen.add(chunk)
+            out.append(chunk)
+    return out
+
+
+def _is_metric_span(raw: str) -> bool:
+    """True for 'Label: 12.3' style bullets — soft n-grams would over-match labels."""
+    return bool(re.search(r":\s*\d", raw or ""))
+
+
 def _example_claim_spans(examples: str, *, min_len: int = 20) -> list[str]:
     """Extract candidate factual spans from example report text."""
     spans: list[str] = []
@@ -234,18 +259,33 @@ def example_bleed_phrases(
     allowed: str,
     min_len: int = 20,
 ) -> list[str]:
-    """Return example spans that appear in draft but not in allowed sources."""
+    """Return example spans (or soft subphrases) in draft but not in allowed sources."""
     if not has_real_examples(examples) or not (draft or "").strip():
         return []
     draft_cmp = _norm_overlap_text(draft)
     allowed_cmp = _norm_overlap_text(allowed)
     found: list[str] = []
+    found_keys: set[str] = set()
+    soft_min = min(min_len, 18)
     for raw in _example_claim_spans(examples, min_len=min_len):
         key = _norm_claim_key(raw)
-        if len(key) < min_len:
+        if len(key) < soft_min:
             continue
-        if key in draft_cmp and key not in allowed_cmp:
-            found.append(raw)
+        # Metric bullets: exact span only (avoid stripping shared labels like
+        # "Mean time to resolve" when the figure differs).
+        candidates = (
+            [key]
+            if _is_metric_span(raw)
+            else _soft_subphrase_keys(key, min_words=3, min_len=soft_min)
+        )
+        # Keep every matching n-gram (not just the longest) so tense/paraphrase
+        # variants still hit shorter shared tails like "within planned bands".
+        for cand in candidates:
+            if cand in found_keys:
+                continue
+            if cand in draft_cmp and cand not in allowed_cmp:
+                found.append(cand)
+                found_keys.add(cand)
     return found[:16]
 
 
@@ -275,6 +315,10 @@ def sanitize_style_notes(notes: str, examples: str) -> str:
         text = pattern.sub(_OMIT_CLAIM, text)
         pattern_raw = re.compile(re.escape(raw), re.IGNORECASE)
         text = pattern_raw.sub(_OMIT_CLAIM, text)
+        for soft in _soft_subphrase_keys(key, min_words=3, min_len=18):
+            if soft == key:
+                continue
+            text = re.compile(re.escape(soft), re.IGNORECASE).sub(_OMIT_CLAIM, text)
     cleaned: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -286,28 +330,51 @@ def sanitize_style_notes(notes: str, examples: str) -> str:
     return out + ("\n" if (notes or "").endswith("\n") else "")
 
 
+def _line_without_bleed(line: str, phrase_keys: list[str]) -> str:
+    """Drop sentences/bullets that contain a bleed phrase; keep headings."""
+    stripped = line.strip()
+    if not stripped:
+        return line.rstrip()
+    if stripped.startswith("#"):
+        return line.rstrip()
+    bullet = ""
+    match = re.match(r"^([ \t]*[-*•]\s+)", line)
+    content = line
+    if match:
+        bullet = match.group(1)
+        content = line[match.end() :]
+    kept: list[str] = []
+    for part in _SPAN_SPLIT.split(content):
+        piece = " ".join(part.split()).strip()
+        if not piece:
+            continue
+        piece_cmp = _norm_overlap_text(piece)
+        if any(pk in piece_cmp for pk in phrase_keys):
+            continue
+        kept.append(piece)
+    if not kept:
+        return ""
+    return f"{bullet}{' '.join(kept)}".rstrip()
+
+
 def strip_example_bleed(body: str, examples: str, *, allowed: str) -> str:
-    """Remove example-only spans from a draft/revised body."""
+    """Remove example-only spans (including soft subphrases) from a draft body."""
     text = body or ""
     phrases = example_bleed_phrases(text, examples, allowed=allowed)
     if not phrases:
         return text
-    for raw in sorted(phrases, key=len, reverse=True):
-        key = _norm_claim_key(raw)
-        text = re.sub(re.escape(raw), "", text, flags=re.IGNORECASE)
-        if key:
-            text = re.sub(re.escape(key), "", text, flags=re.IGNORECASE)
+    phrase_keys = [_norm_claim_key(p) for p in phrases if _norm_claim_key(p)]
     lines: list[str] = []
     for line in text.splitlines():
-        stripped = line.strip()
+        scrubbed = _line_without_bleed(line, phrase_keys)
+        stripped = scrubbed.strip()
+        if not stripped:
+            continue
         if stripped in {"-", "*", "- *", "* -"}:
             continue
-        if re.fullmatch(r"[-*•]\s*", stripped):
-            continue
-        # Drop empty bullet leftovers after scrubbing
         if re.fullmatch(r"[-*•]\s*\.?", stripped):
             continue
-        lines.append(line.rstrip())
+        lines.append(scrubbed)
     out = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     return out + ("\n" if (body or "").endswith("\n") else "")
 
