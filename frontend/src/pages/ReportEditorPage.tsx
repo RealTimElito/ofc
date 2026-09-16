@@ -220,8 +220,20 @@ export default function ReportEditorPage() {
   }, [files, documents]);
 
   const themeOptions: ThemeOption[] = useMemo(() => {
+    const libraryDocx = documents.filter((d) => Boolean(d.has_theme_docx));
+    const fromDocs: ThemeOption[] = libraryDocx.map((d) => ({
+      key: `doc-${d.id}`,
+      kind: "document" as const,
+      id: d.id,
+      label: d.title,
+      meta: d.filename ? `library · ${d.filename}` : "library · docx",
+    }));
+    const libraryNames = new Set(
+      libraryDocx.map((d) => (d.filename || "").toLowerCase()).filter(Boolean),
+    );
     const fromFiles: ThemeOption[] = files
       .filter((f) => f.original_name.toLowerCase().endsWith(".docx"))
+      .filter((f) => !libraryNames.has(f.original_name.toLowerCase()))
       .map((f) => ({
         key: `file-${f.id}`,
         kind: "file" as const,
@@ -229,20 +241,7 @@ export default function ReportEditorPage() {
         label: f.original_name,
         meta: `upload · ${f.role}`,
       }));
-    const fromDocs: ThemeOption[] = documents
-      .filter(
-        (d) =>
-          (d.format || "").toLowerCase() === "docx" ||
-          (d.filename || "").toLowerCase().endsWith(".docx"),
-      )
-      .map((d) => ({
-        key: `doc-${d.id}`,
-        kind: "document" as const,
-        id: d.id,
-        label: d.title,
-        meta: d.filename ? `library · ${d.filename}` : "library · docx",
-      }));
-    return [...fromFiles, ...fromDocs];
+    return [...fromDocs, ...fromFiles];
   }, [files, documents]);
 
   const filteredExamples = useMemo(() => {
@@ -613,7 +612,7 @@ export default function ReportEditorPage() {
                   <ul className="search-select-menu">
                     {filteredThemes.length === 0 ? (
                       <li className="empty-option">
-                        No .docx sources — upload an example under Sources
+                        No .docx sources — upload a .docx under Sources (library keeps a copy for theme import)
                       </li>
                     ) : (
                       filteredThemes.map((opt) => (

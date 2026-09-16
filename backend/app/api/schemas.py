@@ -105,6 +105,7 @@ class DocumentOut(BaseModel):
     body_md: str
     source_report_id: Optional[int]
     role: str
+    has_theme_docx: bool = False
     created_at: datetime
     updated_at: datetime
 

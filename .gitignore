@@ -6,11 +6,13 @@ __pycache__/
 .pytest_cache/
 .cursor/
 data/uploads/*
+data/library_docx/*
 data/reports/*
 data/db/*
 data/style_cache/*
 data/themes/*
 !data/uploads/.gitkeep
+!data/library_docx/.gitkeep
 !data/reports/.gitkeep
 !data/db/.gitkeep
 !data/style_cache/.gitkeep

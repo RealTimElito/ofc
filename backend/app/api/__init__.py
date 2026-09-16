@@ -103,6 +103,15 @@ def _project_out(p: ReportProject) -> ReportProjectOut:
     )
 
 
+def _persist_library_docx(src: Path) -> str:
+    """Copy a .docx into durable library storage; return absolute path string."""
+    settings = get_settings()
+    settings.ensure_dirs()
+    dest = settings.library_docx_dir / f"{uuid.uuid4().hex}.docx"
+    shutil.copy2(src, dest)
+    return str(dest.resolve())
+
+
 def _resolve_docx_path(db: Session, source: str, source_id: int) -> tuple[Path, str]:
     """Return (docx path, label) for theme extraction."""
     if source == "file":
@@ -121,7 +130,12 @@ def _resolve_docx_path(db: Session, source: str, source_id: int) -> tuple[Path, 
         if not doc:
             raise HTTPException(404, "Document not found")
         label = doc.filename or doc.title
-        # Prefer a matching upload by original name when format is docx
+        stored = (getattr(doc, "stored_docx_path", None) or "").strip()
+        if stored:
+            path = Path(stored)
+            if path.is_file():
+                return path, label or doc.title
+        # Legacy fallback: matching upload by original name
         if (doc.format or "").lower() == "docx" or (doc.filename or "").lower().endswith(
             ".docx"
         ):
@@ -132,6 +146,12 @@ def _resolve_docx_path(db: Session, source: str, source_id: int) -> tuple[Path, 
                 .first()
             )
             if match and Path(match.stored_path).is_file():
+                # Heal: persist a durable copy so future imports survive upload delete
+                try:
+                    doc.stored_docx_path = _persist_library_docx(Path(match.stored_path))
+                    db.commit()
+                except OSError:
+                    pass
                 return Path(match.stored_path), label or match.original_name
         raise HTTPException(
             400,
@@ -296,6 +316,14 @@ async def upload_file(
     if suffix.lower() in {".docx", ".md", ".markdown", ".txt"}:
         body = read_upload_text(dest)
         if not body.startswith("["):
+            stored_docx = ""
+            if suffix.lower() == ".docx":
+                try:
+                    stored_docx = _persist_library_docx(dest)
+                except OSError as exc:
+                    raise HTTPException(
+                        500, f"Failed to store library .docx copy: {exc}"
+                    ) from exc
             db.add(
                 Document(
                     title=Path(row.original_name).stem,
@@ -303,6 +331,7 @@ async def upload_file(
                     format="docx" if suffix.lower() == ".docx" else "text",
                     body_md=body,
                     role=role,
+                    stored_docx_path=stored_docx,
                 )
             )
             db.commit()
@@ -365,8 +394,19 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(Document, doc_id)
     if not row:
         raise HTTPException(404, "Document not found")
+    stored = (getattr(row, "stored_docx_path", None) or "").strip()
     db.delete(row)
     db.commit()
+    if stored:
+        path = Path(stored)
+        settings = get_settings()
+        try:
+            if path.is_file() and path.resolve().is_relative_to(
+                settings.library_docx_dir.resolve()
+            ):
+                path.unlink()
+        except OSError:
+            pass
     return {"ok": True}
 
 

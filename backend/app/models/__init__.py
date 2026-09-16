@@ -93,6 +93,8 @@ class Document(Base):
     filename: Mapped[str] = mapped_column(String(512), default="")
     format: Mapped[str] = mapped_column(String(32), default="markdown")  # markdown|docx|text
     body_md: Mapped[str] = mapped_column(Text, default="")
+    # Durable copy of original .docx for theme import (independent of uploads/)
+    stored_docx_path: Mapped[str] = mapped_column(String(1024), default="")
     source_report_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("report_projects.id"), nullable=True
     )
@@ -104,6 +106,15 @@ class Document(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+    @property
+    def has_theme_docx(self) -> bool:
+        path = (self.stored_docx_path or "").strip()
+        if not path:
+            return False
+        from pathlib import Path
+
+        return Path(path).is_file()
 
 
 class ReportProject(Base):

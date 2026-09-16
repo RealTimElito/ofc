@@ -45,6 +45,11 @@ class Settings(BaseSettings):
         return self.ofc_data_dir / "uploads"
 
     @property
+    def library_docx_dir(self) -> Path:
+        """Durable .docx binaries for library docs (theme import without re-upload)."""
+        return self.ofc_data_dir / "library_docx"
+
+    @property
     def reports_dir(self) -> Path:
         return self.ofc_data_dir / "reports"
 
@@ -67,6 +72,7 @@ class Settings(BaseSettings):
         for path in (
             self.ofc_data_dir,
             self.uploads_dir,
+            self.library_docx_dir,
             self.reports_dir,
             self.themes_dir,
             self.style_cache_dir,

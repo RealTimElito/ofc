@@ -46,6 +46,7 @@ export type LibraryDocument = {
   body_md: string;
   source_report_id: number | null;
   role: string;
+  has_theme_docx?: boolean;
   created_at: string;
   updated_at: string;
 };
