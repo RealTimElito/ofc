@@ -830,6 +830,24 @@ def cancel_generate(report_id: int, db: Session = Depends(get_db)):
     }
 
 
+@router.post("/reports/{report_id}/scrub-bleed", response_model=ReportProjectOut)
+def scrub_report_bleed(report_id: int, db: Session = Depends(get_db)):
+    """Strip example-only phrasing from the current draft without regenerating."""
+    row = db.get(ReportProject, report_id)
+    if not row:
+        raise HTTPException(404, "Report not found")
+    if not (row.body_md or "").strip():
+        raise HTTPException(400, "Report body is empty — nothing to scrub")
+    if is_job_active(report_id):
+        raise HTTPException(409, "Generation in progress — cancel or wait before scrubbing")
+    from app.services.pipeline import ReportPipeline
+
+    pipeline = ReportPipeline(db, row)
+    pipeline.scrub_current_draft()
+    db.refresh(row)
+    return _project_out(row)
+
+
 @router.get("/reports/{report_id}/context-preview")
 def preview_report_context(report_id: int, db: Session = Depends(get_db)):
     """Dry-run the context pack (no LLM): lengths, fingerprint, cache hit."""

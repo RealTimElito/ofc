@@ -221,6 +221,8 @@ export const api = {
       `/api/reports/${id}/cancel`,
       { method: "POST" },
     ),
+  scrubBleed: (id: number) =>
+    request<ReportProject>(`/api/reports/${id}/scrub-bleed`, { method: "POST" }),
   listReportRuns: (id: number, opts?: { limit?: number; errorsOnly?: boolean }) => {
     const params = new URLSearchParams();
     if (opts?.limit != null) params.set("limit", String(opts.limit));

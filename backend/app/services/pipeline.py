@@ -89,8 +89,10 @@ Produce a structured Markdown outline for the report. Prefer section names and
 ordering that match the style notes / examples when they fit the brief and results.
 Include bullet points of what each section must cover, grounded only in the brief
 and results. Outlook / next-steps bullets may only restate notes or constraints
-from results_context or the brief — never from examples. Do not write the full
-report yet."""
+from results_context or the brief — never from examples. Do not reuse example
+openers, staffing/backlog/"planned bands" themes, or prior-period recommendations.
+If results/brief give no outlook content, omit Outlook or leave it empty.
+Do not write the full report yet."""
 
 
 DRAFT_PROMPT = """Title: {title}
@@ -208,6 +210,44 @@ def _norm_claim_key(text: str) -> str:
     return _TRAIL_PUNCT.sub("", _norm_overlap_text(text))
 
 
+_BLEED_STOPWORDS = frozenset(
+    """
+    a an the and or but if to of in on for with from by as at is was were be been
+    being this that these those it its their there here than then also into over
+    under about after before during without within due any all may can will would
+    should could none null n/a
+    """.split()
+)
+
+# Month names → common abbreviations so "August 12" soft-matches "12 Aug".
+_MONTH_TO_ABBR = {
+    "january": "jan",
+    "february": "feb",
+    "march": "mar",
+    "april": "apr",
+    "may": "may",
+    "june": "jun",
+    "july": "jul",
+    "august": "aug",
+    "september": "sep",
+    "october": "oct",
+    "november": "nov",
+    "december": "dec",
+}
+
+
+def _norm_allowed_text(text: str) -> str:
+    """Normalize allowed fact text for bleed comparison (month aliases)."""
+    base = _norm_overlap_text(text)
+    parts: list[str] = []
+    for token in base.split():
+        parts.append(token)
+        abbr = _MONTH_TO_ABBR.get(token)
+        if abbr and abbr != token:
+            parts.append(abbr)
+    return " ".join(parts)
+
+
 def _soft_subphrase_keys(
     key: str, *, min_words: int = 3, min_len: int = 18
 ) -> list[str]:
@@ -231,6 +271,37 @@ def _soft_subphrase_keys(
 def _is_metric_span(raw: str) -> bool:
     """True for 'Label: 12.3' style bullets — soft n-grams would over-match labels."""
     return bool(re.search(r":\s*\d", raw or ""))
+
+
+def _supported_by_allowed(cand: str, allowed_cmp: str, *, min_ratio: float = 0.65) -> bool:
+    """True when a draft span is grounded in results/brief despite wording drift."""
+    if not cand:
+        return False
+    if cand in allowed_cmp:
+        return True
+    # Metric-style: every numeric token must appear in allowed.
+    nums = re.findall(r"\d+(?:\.\d+)?", cand)
+    if nums and _is_metric_span(cand) and all(n in allowed_cmp for n in nums):
+        label = re.sub(r":\s*\d+(?:\.\d+)?.*$", "", cand).strip()
+        label_toks = [t for t in label.split() if t not in _BLEED_STOPWORDS]
+        if not label_toks or any(t in allowed_cmp for t in label_toks):
+            return True
+    toks = [
+        w
+        for w in cand.split()
+        if w and w not in _BLEED_STOPWORDS
+    ]
+    if len(toks) < 3:
+        return cand in allowed_cmp
+    hits = 0
+    for tok in toks:
+        if tok in allowed_cmp:
+            hits += 1
+            continue
+        abbr = _MONTH_TO_ABBR.get(tok)
+        if abbr and abbr in allowed_cmp:
+            hits += 1
+    return (hits / len(toks)) >= min_ratio
 
 
 def _example_claim_spans(examples: str, *, min_len: int = 20) -> list[str]:
@@ -264,11 +335,16 @@ def example_bleed_phrases(
     allowed: str,
     min_len: int = 20,
 ) -> list[str]:
-    """Return example spans (or soft subphrases) in draft but not in allowed sources."""
+    """Return example spans (or soft subphrases) in draft but not in allowed sources.
+
+    Keeps at most one match per example span (longest soft hit) so the phrase
+    budget is not flooded by n-grams of a single claim — that previously let
+    other bleeds (e.g. outlook fluff) slip past scrubbing.
+    """
     if not has_real_examples(examples) or not (draft or "").strip():
         return []
     draft_cmp = _norm_overlap_text(draft)
-    allowed_cmp = _norm_overlap_text(allowed)
+    allowed_cmp = _norm_allowed_text(allowed)
     found: list[str] = []
     found_keys: set[str] = set()
     soft_min = min(min_len, 18)
@@ -283,15 +359,28 @@ def example_bleed_phrases(
             if _is_metric_span(raw)
             else _soft_subphrase_keys(key, min_words=3, min_len=soft_min)
         )
-        # Keep every matching n-gram (not just the longest) so tense/paraphrase
-        # variants still hit shorter shared tails like "within planned bands".
-        for cand in candidates:
-            if cand in found_keys:
+        matched: str | None = None
+        for cand in candidates:  # longer first
+            if cand not in draft_cmp:
                 continue
-            if cand in draft_cmp and cand not in allowed_cmp:
-                found.append(cand)
-                found_keys.add(cand)
-    return found[:16]
+            # Longest in-draft hit decides for this span — do not fall through
+            # to shorter fragments of an already-grounded claim.
+            if not _supported_by_allowed(cand, allowed_cmp):
+                matched = cand
+            break
+        if not matched or matched in found_keys:
+            continue
+        # Skip if a longer phrase already covers this match.
+        if any(matched != prev and matched in prev for prev in found_keys):
+            continue
+        # Replace shorter phrases covered by this longer match.
+        drop = {prev for prev in found_keys if prev != matched and prev in matched}
+        if drop:
+            found = [p for p in found if p not in drop]
+            found_keys -= drop
+        found.append(matched)
+        found_keys.add(matched)
+    return found[:32]
 
 
 def format_bleed_hints(phrases: list[str]) -> str:
@@ -452,6 +541,28 @@ class ReportPipeline:
             allowed=self._allowed_fact_text(),
         )
 
+    def scrub_current_draft(self) -> tuple[str, list[str]]:
+        """Re-apply example-bleed scrub to body_md (and outline) without regenerating."""
+        before = self.project.body_md or ""
+        phrases = example_bleed_phrases(
+            before,
+            self.pack.get("examples") or "",
+            allowed=self._allowed_fact_text(),
+        )
+        scrubbed = self._scrub_body(before)
+        self.project.body_md = scrubbed
+        outline = self.project.outline_md or ""
+        if outline.strip():
+            self.project.outline_md = self._scrub_body(outline)
+        self.db.commit()
+        removed = max(0, len(phrases))
+        self._log_run(
+            "scrub_bleed",
+            "ok",
+            f"removed_candidates={removed}; phrases={phrases[:12]!r}",
+        )
+        return scrubbed, phrases
+
     def _apply_style_notes(self, notes: str, key: str, *, from_cache: bool) -> str:
         cleaned = sanitize_style_notes(notes, self.pack.get("examples") or "")
         self.project.style_notes_md = cleaned
@@ -552,7 +663,7 @@ class ReportPipeline:
             style_notes=self._style_notes_for_prompt(),
         )
         try:
-            outline = await self.client.chat(prompt)
+            outline = self._scrub_body(await self.client.chat(prompt))
             self.project.outline_md = outline
             self.project.status = "outlined"
             self.db.commit()

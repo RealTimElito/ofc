@@ -504,6 +504,22 @@ export default function ReportEditorPage() {
     }
   }
 
+  async function scrubExamplePhrasing() {
+    if (!report || !(report.body_md || "").trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await save({ body_md: report.body_md, outline_md: report.outline_md });
+      const updated = await api.scrubBleed(report.id);
+      setReport(normalizeReport(updated));
+      setTab("body");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function markDone() {
     if (!report) return;
     setBusy(true);
@@ -1074,11 +1090,21 @@ export default function ReportEditorPage() {
               >
                 Revise
               </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy || generating || !(report.body_md || "").trim()}
+                title="Remove example-only phrasing from the current draft without regenerating"
+                onClick={() => void scrubExamplePhrasing()}
+              >
+                Scrub example phrasing
+              </button>
             </div>
             <p className="empty" style={{ marginBottom: 0 }}>
               Full = style notes → outline → draft → critique → revise. Style notes are cached per
               example set; “use all” ranks examples by brief similarity (no model fine-tuning).
-              Needs a reachable local LLM with a pulled model.
+              Needs a reachable local LLM with a pulled model. Scrub example phrasing reuses the
+              same bleed filters as generate (no LLM call).
             </p>
           </div>
 
