@@ -1,0 +1,10 @@
+# Sample context file — upload as "context" in OFC Sources
+
+Period: 2025-Q3
+Audience: operations leadership
+Constraints: air-gapped; no external citations
+
+Must include:
+- tickets_closed, mttr_hours, critical_incidents, sla_met_pct
+- One paragraph on the network flap incident
+- Short outlook with at most three bullets
