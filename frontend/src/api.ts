@@ -73,6 +73,7 @@ export type ReportProject = {
   llm_profile_id: number | null;
   status: string;
   style_notes_md?: string;
+  style_notes_key?: string;
   outline_md: string;
   body_md: string;
   critique_md: string;
@@ -237,8 +238,10 @@ export const api = {
       examples_chars: number;
       has_examples: boolean;
       style_notes_key: string;
+      project_style_notes_key: string;
       style_notes_cached: boolean;
       style_notes_on_project: boolean;
+      style_notes_stale: boolean;
       results_preview: string;
       examples_preview: string;
     }>(`/api/reports/${id}/context-preview`),

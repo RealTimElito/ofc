@@ -164,6 +164,7 @@ class ReportProjectOut(BaseModel):
     llm_profile_id: Optional[int]
     status: str
     style_notes_md: str = ""
+    style_notes_key: str = ""
     outline_md: str
     body_md: str
     critique_md: str

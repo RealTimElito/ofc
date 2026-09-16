@@ -94,6 +94,7 @@ def _project_out(p: ReportProject) -> ReportProjectOut:
         llm_profile_id=p.llm_profile_id,
         status=p.status,
         style_notes_md=getattr(p, "style_notes_md", None) or "",
+        style_notes_key=getattr(p, "style_notes_key", None) or "",
         outline_md=p.outline_md,
         body_md=p.body_md,
         critique_md=p.critique_md,
@@ -101,6 +102,39 @@ def _project_out(p: ReportProject) -> ReportProjectOut:
         created_at=p.created_at,
         updated_at=p.updated_at,
     )
+
+
+def _clear_project_style_notes(project: ReportProject) -> bool:
+    """Drop stored style notes on a project. Returns True if anything changed."""
+    had = bool(
+        (getattr(project, "style_notes_md", None) or "").strip()
+        or (getattr(project, "style_notes_key", None) or "").strip()
+    )
+    project.style_notes_md = ""
+    project.style_notes_key = ""
+    return had
+
+
+def _invalidate_style_after_examples_changed(db: Session) -> int:
+    """Wipe disk style cache and clear style notes on every report.
+
+    Example packs are content-fingerprinted; when the library / uploads /
+    example-query corpus changes, prior notes and cache entries can disagree
+    with the next pack. Clearing is cheaper than a wrong formulation pass.
+    """
+    from app.services.style_cache import clear_style_cache
+
+    settings = get_settings()
+    settings.ensure_dirs()
+    cleared_files = clear_style_cache(settings.style_cache_dir)
+    for project in db.query(ReportProject).all():
+        _clear_project_style_notes(project)
+    db.commit()
+    return cleared_files
+
+
+def _role_includes_examples(role: str | None) -> bool:
+    return (role or "") in ("example", "both", "examples")
 
 
 def _persist_library_docx(src: Path) -> str:
@@ -180,6 +214,8 @@ def _archive_report_to_library(
         existing.role = role
         db.commit()
         db.refresh(existing)
+        if _role_includes_examples(role):
+            _invalidate_style_after_examples_changed(db)
         return existing
     doc = Document(
         title=report.title,
@@ -192,6 +228,8 @@ def _archive_report_to_library(
     db.add(doc)
     db.commit()
     db.refresh(doc)
+    if _role_includes_examples(role):
+        _invalidate_style_after_examples_changed(db)
     return doc
 
 
@@ -335,6 +373,8 @@ async def upload_file(
                 )
             )
             db.commit()
+    if _role_includes_examples(role):
+        _invalidate_style_after_examples_changed(db)
     return row
 
 
@@ -345,9 +385,12 @@ def update_file_role(file_id: int, role: str, db: Session = Depends(get_db)):
     row = db.get(UploadedFile, file_id)
     if not row:
         raise HTTPException(404, "File not found")
+    prev = row.role
     row.role = role
     db.commit()
     db.refresh(row)
+    if _role_includes_examples(prev) or _role_includes_examples(role):
+        _invalidate_style_after_examples_changed(db)
     return row
 
 
@@ -356,11 +399,14 @@ def delete_file(file_id: int, db: Session = Depends(get_db)):
     row = db.get(UploadedFile, file_id)
     if not row:
         raise HTTPException(404, "File not found")
+    was_example = _role_includes_examples(row.role)
     path = Path(row.stored_path)
     if path.exists():
         path.unlink()
     db.delete(row)
     db.commit()
+    if was_example:
+        _invalidate_style_after_examples_changed(db)
     return {"ok": True}
 
 
@@ -386,6 +432,8 @@ def create_document(body: DocumentIn, db: Session = Depends(get_db)):
     db.add(row)
     db.commit()
     db.refresh(row)
+    if _role_includes_examples(body.role):
+        _invalidate_style_after_examples_changed(db)
     return row
 
 
@@ -396,9 +444,12 @@ def update_document_role(doc_id: int, role: str, db: Session = Depends(get_db)):
     row = db.get(Document, doc_id)
     if not row:
         raise HTTPException(404, "Document not found")
+    prev = row.role
     row.role = role
     db.commit()
     db.refresh(row)
+    if _role_includes_examples(prev) or _role_includes_examples(role):
+        _invalidate_style_after_examples_changed(db)
     return row
 
 
@@ -407,6 +458,7 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(Document, doc_id)
     if not row:
         raise HTTPException(404, "Document not found")
+    was_example = _role_includes_examples(row.role)
     stored = (getattr(row, "stored_docx_path", None) or "").strip()
     db.delete(row)
     db.commit()
@@ -420,6 +472,8 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
                 path.unlink()
         except OSError:
             pass
+    if was_example:
+        _invalidate_style_after_examples_changed(db)
     return {"ok": True}
 
 
@@ -479,6 +533,8 @@ def create_query(body: SavedQueryIn, db: Session = Depends(get_db)):
     db.add(row)
     db.commit()
     db.refresh(row)
+    if _role_includes_examples(body.purpose):
+        _invalidate_style_after_examples_changed(db)
     return row
 
 
@@ -487,8 +543,11 @@ def delete_query(query_id: int, db: Session = Depends(get_db)):
     row = db.get(SavedQuery, query_id)
     if not row:
         raise HTTPException(404, "Query not found")
+    was_example = _role_includes_examples(row.purpose)
     db.delete(row)
     db.commit()
+    if was_example:
+        _invalidate_style_after_examples_changed(db)
     return {"ok": True}
 
 
@@ -550,6 +609,15 @@ def update_report(
     row = db.get(ReportProject, report_id)
     if not row:
         raise HTTPException(404, "Report not found")
+    examples_touched = (
+        body.file_ids is not None
+        or body.query_ids is not None
+        or body.document_ids is not None
+        or body.example_file_ids is not None
+        or body.use_all_examples is not None
+    )
+    # use-all ranking keys off title/brief, so brief edits can change the pack.
+    ranking_touched = body.brief is not None or body.title is not None
     if body.title is not None:
         row.title = body.title
     if body.brief is not None:
@@ -572,6 +640,33 @@ def update_report(
         row.outline_md = body.outline_md
     if body.theme is not None:
         row.theme_json = theme_to_json(body.theme.model_dump())
+
+    if examples_touched or (
+        ranking_touched and bool(getattr(row, "use_all_examples", True))
+    ):
+        old_key = getattr(row, "style_notes_key", None) or ""
+        if (getattr(row, "style_notes_md", None) or "").strip() or old_key:
+            from app.services.context import build_context_pack, has_real_examples
+            from app.services.style_cache import fingerprint_examples
+
+            pack = build_context_pack(
+                db,
+                file_ids_json=row.file_ids_json,
+                query_ids_json=row.query_ids_json,
+                document_ids_json=getattr(row, "document_ids_json", None) or "[]",
+                example_file_ids_json=getattr(row, "example_file_ids_json", None)
+                or "[]",
+                use_all_examples=bool(getattr(row, "use_all_examples", True)),
+                brief=row.brief,
+                title=row.title,
+            )
+            examples = pack["examples"]
+            new_key = (
+                fingerprint_examples(examples) if has_real_examples(examples) else ""
+            )
+            if new_key != old_key:
+                _clear_project_style_notes(row)
+
     db.commit()
     db.refresh(row)
     return _project_out(row)
@@ -725,6 +820,8 @@ def preview_report_context(report_id: int, db: Session = Depends(get_db)):
     key = fingerprint_examples(examples) if has_real_examples(examples) else ""
     settings = get_settings()
     cached = load_style_notes(settings.style_cache_dir, key) if key else None
+    project_key = getattr(row, "style_notes_key", None) or ""
+    on_project = bool((getattr(row, "style_notes_md", None) or "").strip())
     example_block_count = 0
     if has_real_examples(examples):
         example_block_count = sum(
@@ -738,8 +835,10 @@ def preview_report_context(report_id: int, db: Session = Depends(get_db)):
         "example_blocks": example_block_count,
         "has_examples": has_real_examples(examples),
         "style_notes_key": key,
+        "project_style_notes_key": project_key,
         "style_notes_cached": bool(cached),
-        "style_notes_on_project": bool((getattr(row, "style_notes_md", None) or "").strip()),
+        "style_notes_on_project": on_project,
+        "style_notes_stale": on_project and (not key or project_key != key),
         "results_preview": (pack["results_context"] or "")[:1200],
         "examples_preview": (examples or "")[:1200],
     }

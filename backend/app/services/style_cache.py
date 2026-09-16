@@ -54,3 +54,33 @@ def save_style_notes(cache_dir: Path, key: str, notes: str) -> None:
         "style_notes_md": text,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def delete_style_notes(cache_dir: Path, key: str) -> bool:
+    """Remove one cache entry. Returns True if a file was deleted."""
+    if not key or not _SAFE_KEY.match(key):
+        return False
+    path = _cache_path(cache_dir, key)
+    if not path.is_file():
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def clear_style_cache(cache_dir: Path) -> int:
+    """Delete all on-disk style-note cache files. Returns count removed."""
+    if not cache_dir.is_dir():
+        return 0
+    removed = 0
+    for path in cache_dir.glob("*.json"):
+        if not _SAFE_KEY.match(path.stem):
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed

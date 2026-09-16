@@ -50,6 +50,7 @@ function normalizeReport(r: ReportProject): ReportProject {
     document_ids: r.document_ids ?? [],
     example_file_ids: r.example_file_ids ?? [],
     use_all_examples: r.use_all_examples ?? true,
+    style_notes_key: r.style_notes_key ?? "",
     theme: r.theme ?? EMPTY_THEME,
   };
 }
@@ -92,6 +93,7 @@ export default function ReportEditorPage() {
   const [lastErrorRun, setLastErrorRun] = useState<PipelineRun | null>(null);
   const [llmHealth, setLlmHealth] = useState<LlmHealth>("idle");
   const [llmHealthDetail, setLlmHealthDetail] = useState<string | null>(null);
+  const [styleNotesStale, setStyleNotesStale] = useState(false);
   const [tab, setTab] = useState<"body" | "outline" | "critique" | "style">("body");
   const [bodyView, setBodyView] = useState<BodyView>("split");
   const [previewOpen, setPreviewOpen] = useState(true);
@@ -120,6 +122,16 @@ export default function ReportEditorPage() {
       await loadLastErrorRun(r.id);
     } else {
       setLastErrorRun(null);
+    }
+    await refreshStyleStale(r.id);
+  }
+
+  async function refreshStyleStale(id: number) {
+    try {
+      const preview = await api.contextPreview(id);
+      setStyleNotesStale(Boolean(preview.style_notes_stale));
+    } catch {
+      setStyleNotesStale(false);
     }
   }
 
@@ -182,6 +194,17 @@ export default function ReportEditorPage() {
     if (!report) return;
     const updated = await api.updateReport(report.id, patch);
     setReport(normalizeReport(updated));
+    const touchesExamples =
+      "brief" in patch ||
+      "title" in patch ||
+      "file_ids" in patch ||
+      "query_ids" in patch ||
+      "document_ids" in patch ||
+      "example_file_ids" in patch ||
+      "use_all_examples" in patch;
+    if (touchesExamples) {
+      await refreshStyleStale(updated.id);
+    }
   }
 
   function toggleId(list: number[], value: number): number[] {
@@ -331,10 +354,12 @@ export default function ReportEditorPage() {
       const updated = await api.generate(report.id, stage, true);
       setReport(normalizeReport(updated));
       setLastErrorRun(null);
+      setStyleNotesStale(false);
       if (stage === "outline") setTab("outline");
       else if (stage === "critique") setTab("critique");
       else if (stage === "style_notes") setTab("style");
       else setTab("body");
+      await refreshStyleStale(updated.id);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
@@ -552,6 +577,16 @@ export default function ReportEditorPage() {
             >
               Recheck
             </button>
+          </p>
+        </div>
+      )}
+
+      {styleNotesStale && (
+        <div className="warn-banner" role="status">
+          <strong>Style notes out of date</strong>
+          <p className="warn-banner-detail">
+            Examples (or ranking) changed since these notes were extracted. Re-run{" "}
+            <strong>Style notes</strong> or Full generate before drafting.
           </p>
         </div>
       )}
@@ -1082,9 +1117,15 @@ export default function ReportEditorPage() {
           {tab === "style" && (
             <>
               <p className="field-hint">
-                Formulation signals extracted from examples (cached per example set). Re-run Style
-                notes to refresh after changing examples.
+                Formulation signals extracted from examples (cached per example set). Changing
+                library examples clears the cache; re-run Style notes after the example set
+                changes.
               </p>
+              {styleNotesStale && (
+                <p className="field-hint" style={{ color: "var(--warn)" }}>
+                  These notes no longer match the current examples fingerprint.
+                </p>
+              )}
               <textarea
                 className="report-body"
                 value={report.style_notes_md || ""}

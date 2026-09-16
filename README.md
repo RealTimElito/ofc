@@ -25,7 +25,9 @@ Pipeline stages: **style notes → outline → draft → critique → revise** (
 When examples are attached, style notes capture formulation signals (phrases, voice, section
 naming, metrics/hedging) so later stages prefer that language without copying example-only facts.
 Style notes are **cached on disk** per example-set fingerprint (`data/style_cache/`) so identical
-example packs skip re-extraction.
+packs skip re-extraction. Changing library examples, example uploads, or example SQL queries
+clears that cache and stored notes on reports; changing a report’s example selection or brief
+(when “use all examples” ranks the pack) clears that report’s notes when the fingerprint shifts.
 
 ### Training vs retrieval (small corpora)
 
