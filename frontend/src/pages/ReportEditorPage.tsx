@@ -44,6 +44,37 @@ const EMPTY_THEME: ReportTheme = {
   source_label: "",
 };
 
+const STAGE_LABELS: Record<string, string> = {
+  style_notes: "Extracting style notes",
+  outlining: "Writing outline",
+  outlined: "Outline ready",
+  drafting: "Writing draft",
+  drafted: "Draft ready",
+  critiquing: "Running critique",
+  critiqued: "Critique ready",
+  revising: "Revising draft",
+  ready: "Ready",
+  error: "Stopped with an error",
+  draft: "Draft",
+  done: "Done",
+};
+
+const RUN_STAGE_LABELS: Record<string, string> = {
+  style_notes: "style notes",
+  outline: "outline",
+  draft: "draft",
+  critique: "critique",
+  revise: "revise",
+};
+
+function stageProgressLabel(status: string): string {
+  return STAGE_LABELS[status] ?? status.replace(/_/g, " ");
+}
+
+function runStageLabel(stage: string): string {
+  return RUN_STAGE_LABELS[stage] ?? stage.replace(/_/g, " ");
+}
+
 function normalizeReport(r: ReportProject): ReportProject {
   return {
     ...r,
@@ -89,6 +120,9 @@ export default function ReportEditorPage() {
   const [queries, setQueries] = useState<SavedQuery[]>([]);
   const [profiles, setProfiles] = useState<LlmProfile[]>([]);
   const [busy, setBusy] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [pipelineStatus, setPipelineStatus] = useState<string | null>(null);
+  const [latestFinishedRun, setLatestFinishedRun] = useState<PipelineRun | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastErrorRun, setLastErrorRun] = useState<PipelineRun | null>(null);
   const [llmHealth, setLlmHealth] = useState<LlmHealth>("idle");
@@ -189,6 +223,39 @@ export default function ReportEditorPage() {
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
+
+  useEffect(() => {
+    if (!generating || !reportId) {
+      setPipelineStatus(null);
+      setLatestFinishedRun(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function pollProgress() {
+      try {
+        const [r, runs] = await Promise.all([
+          api.getReport(reportId),
+          api.listReportRuns(reportId, { limit: 5 }),
+        ]);
+        if (cancelled) return;
+        setPipelineStatus(r.status);
+        setReport((prev) => (prev ? { ...prev, status: r.status } : prev));
+        const finished = runs.find((run) => run.status === "ok" || run.status === "skipped");
+        setLatestFinishedRun(finished ?? null);
+      } catch {
+        /* keep last known progress while generate continues */
+      }
+    }
+
+    void pollProgress();
+    const timer = window.setInterval(() => void pollProgress(), 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [generating, reportId]);
 
   async function save(patch: Record<string, unknown>) {
     if (!report) return;
@@ -336,6 +403,9 @@ export default function ReportEditorPage() {
     if (!report) return;
     if (!confirmGenerateDespiteLlm(stage)) return;
     setBusy(true);
+    setGenerating(true);
+    setPipelineStatus(report.status);
+    setLatestFinishedRun(null);
     setError(null);
     setLastErrorRun(null);
     try {
@@ -371,6 +441,7 @@ export default function ReportEditorPage() {
         /* keep request error message */
       }
     } finally {
+      setGenerating(false);
       setBusy(false);
     }
   }
@@ -502,8 +573,20 @@ export default function ReportEditorPage() {
             />
           </h1>
           <p className="status-line">
-            Status: <span className={`status ${report.status}`}>{report.status}</span>
-            {busy ? " · working…" : ""}
+            Status:{" "}
+            <span className={`status ${pipelineStatus ?? report.status}`}>
+              {pipelineStatus ?? report.status}
+            </span>
+            {generating ? (
+              <span className="pipeline-progress" role="status" aria-live="polite">
+                {stageProgressLabel(pipelineStatus ?? report.status)}
+                {latestFinishedRun
+                  ? ` · finished ${runStageLabel(latestFinishedRun.stage)}`
+                  : ""}
+              </span>
+            ) : busy ? (
+              " · working…"
+            ) : null}
           </p>
         </div>
         <div className="row export-row">
@@ -856,6 +939,14 @@ export default function ReportEditorPage() {
           <div className="panel">
             <h2>Pipeline</h2>
             <p className="field-hint">Generate stages against your brief, examples, and context.</p>
+            {generating && (
+              <p className="pipeline-progress-banner" role="status" aria-live="polite">
+                {stageProgressLabel(pipelineStatus ?? report.status)}
+                {latestFinishedRun
+                  ? ` · last finished: ${runStageLabel(latestFinishedRun.stage)}`
+                  : " · starting…"}
+              </p>
+            )}
             <div className="row">
               <button
                 type="button"
