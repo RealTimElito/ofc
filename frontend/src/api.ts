@@ -157,6 +157,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  updateDocumentRole: (id: number, role: string) =>
+    request<LibraryDocument>(`/api/documents/${id}?role=${encodeURIComponent(role)}`, {
+      method: "PATCH",
+    }),
   deleteDocument: (id: number) => request(`/api/documents/${id}`, { method: "DELETE" }),
 
   listConnections: () => request<DbConnection[]>("/api/db/connections"),

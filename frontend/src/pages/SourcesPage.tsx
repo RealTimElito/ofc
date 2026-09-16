@@ -101,8 +101,9 @@ export default function SourcesPage() {
         <div>
           <h1>Sources</h1>
           <p>
-            Upload files as context or style examples, browse the document library, and/or connect
-            a database for results and prior reports. Both can be mixed on a single report.
+            Manage the material reports pick from: <strong>examples</strong> (house style /
+            wording) and <strong>context &amp; results</strong> (facts). Tag roles here; each
+            report&apos;s editor chooses which ones to use.
           </p>
         </div>
       </div>
@@ -112,7 +113,9 @@ export default function SourcesPage() {
       <div className="panel">
         <h2>Upload files</h2>
         <p className="field-hint">
-          Supports text, Markdown, CSV/JSON, and Word <code>.docx</code> (text is extracted). Legacy{" "}
+          Role maps to the report editor: <em>example</em> → Examples,{" "}
+          <em>context</em> → Context &amp; results, <em>both</em> → either. Supports text,
+          Markdown, CSV/JSON, and Word <code>.docx</code> (text is extracted). Legacy{" "}
           <code>.doc</code> is not supported — convert to <code>.docx</code> first.
         </p>
         <form className="row" onSubmit={onUpload}>
@@ -177,8 +180,9 @@ export default function SourcesPage() {
       <div className="panel">
         <h2>Document library</h2>
         <p className="field-hint">
-          Finished reports (via Mark done) and extracted <code>.docx</code> / Markdown uploads live
-          here. Use them as examples when composing new reports.
+          Finished reports (via Mark done) and extracted <code>.docx</code> / Markdown uploads.
+          Same roles as uploads — usually <em>example</em> for the report editor&apos;s Examples
+          picker (library wins over a duplicate upload of the same file).
         </p>
         {documents.length === 0 ? (
           <p className="empty">Library is empty. Mark a report done or upload a .docx / .md file.</p>
@@ -206,7 +210,16 @@ export default function SourcesPage() {
                     <span className="chip">{d.format}</span>
                   </td>
                   <td>
-                    <span className="chip">{d.role}</span>
+                    <select
+                      value={d.role}
+                      onChange={(e) =>
+                        void api.updateDocumentRole(d.id, e.target.value).then(load)
+                      }
+                    >
+                      <option value="context">context</option>
+                      <option value="example">example</option>
+                      <option value="both">both</option>
+                    </select>
                   </td>
                   <td>
                     {d.source_report_id ? `report #${d.source_report_id}` : "upload"}

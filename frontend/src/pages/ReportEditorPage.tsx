@@ -198,15 +198,6 @@ export default function ReportEditorPage() {
   );
 
   const exampleOptions: ExampleOption[] = useMemo(() => {
-    const fromFiles: ExampleOption[] = files
-      .filter((f) => f.role === "example" || f.role === "both")
-      .map((f) => ({
-        key: `file-${f.id}`,
-        kind: "file" as const,
-        id: f.id,
-        label: f.original_name,
-        meta: `upload · ${f.role}`,
-      }));
     const fromDocs: ExampleOption[] = documents
       .filter((d) => d.role === "example" || d.role === "both")
       .map((d) => ({
@@ -215,6 +206,23 @@ export default function ReportEditorPage() {
         id: d.id,
         label: d.title,
         meta: d.filename ? `library · ${d.filename}` : "library",
+      }));
+    // Prefer library over upload when the same .docx/.md was mirrored on upload.
+    const libraryNames = new Set(
+      documents
+        .filter((d) => d.role === "example" || d.role === "both")
+        .map((d) => (d.filename || "").toLowerCase())
+        .filter(Boolean),
+    );
+    const fromFiles: ExampleOption[] = files
+      .filter((f) => f.role === "example" || f.role === "both")
+      .filter((f) => !libraryNames.has(f.original_name.toLowerCase()))
+      .map((f) => ({
+        key: `file-${f.id}`,
+        kind: "file" as const,
+        id: f.id,
+        label: f.original_name,
+        meta: `upload · ${f.role}`,
       }));
     return [...fromDocs, ...fromFiles];
   }, [files, documents]);
@@ -660,7 +668,8 @@ export default function ReportEditorPage() {
           <div className="panel">
             <h2>Examples</h2>
             <p className="field-hint">
-              Style references only — the pipeline extracts recurring phrases, section naming,
+              Style references from <Link to="/sources">Sources</Link> (uploads &amp; library
+              tagged example/both). The pipeline extracts recurring phrases, section naming,
               voice, terminology, and how metrics/closings are phrased, then prefers those
               formulations (without copying example-only facts).
             </p>
@@ -752,7 +761,8 @@ export default function ReportEditorPage() {
           <div className="panel">
             <h2>Context &amp; results</h2>
             <p className="field-hint">
-              Data and material that should appear in this report (not style examples).
+              Facts for this report from <Link to="/sources">Sources</Link> (uploads tagged
+              context/both, and results queries) — not style examples.
             </p>
 
             <h3 className="subhead">Context files</h3>

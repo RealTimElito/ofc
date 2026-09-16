@@ -270,17 +270,53 @@ def gather_queries_as(
     return parts
 
 
+def _library_example_filenames(db: Session, document_ids: list[int] | None = None) -> set[str]:
+    """Lowercased filenames for library docs (optionally limited to ids)."""
+    q = db.query(Document)
+    if document_ids is not None:
+        if not document_ids:
+            return set()
+        q = q.filter(Document.id.in_(document_ids))
+    names: set[str] = set()
+    for row in q.all():
+        name = (row.filename or "").strip().lower()
+        if name:
+            names.add(name)
+    return names
+
+
+def dedupe_example_file_ids(
+    db: Session, file_ids: list[int], document_ids: list[int]
+) -> list[int]:
+    """Prefer library docs over uploads that mirror the same filename."""
+    library_names = _library_example_filenames(db, document_ids)
+    if not library_names:
+        return list(file_ids)
+    kept: list[int] = []
+    for fid in file_ids:
+        row = db.get(UploadedFile, fid)
+        if not row:
+            continue
+        name = (row.original_name or "").strip().lower()
+        if name and name in library_names:
+            continue
+        kept.append(fid)
+    return kept
+
+
 def all_example_source_ids(db: Session) -> tuple[list[int], list[int], list[int]]:
     """Return (file_ids, document_ids, query_ids) for everything tagged as examples."""
-    files = [
-        r.id
-        for r in db.query(UploadedFile).order_by(UploadedFile.id).all()
-        if r.role in ("example", "both")
-    ]
     docs = [
         r.id
         for r in db.query(Document).order_by(Document.id).all()
         if r.role in ("example", "both")
+    ]
+    library_names = _library_example_filenames(db, docs)
+    files = [
+        r.id
+        for r in db.query(UploadedFile).order_by(UploadedFile.id).all()
+        if r.role in ("example", "both")
+        and (r.original_name or "").strip().lower() not in library_names
     ]
     queries = [
         r.id
@@ -313,6 +349,7 @@ def build_context_pack(
         ex_files = json.loads(example_file_ids_json or "[]")
         ex_docs = json.loads(document_ids_json or "[]")
         ex_queries = list(selected_example_queries)
+        ex_files = dedupe_example_file_ids(db, ex_files, ex_docs)
 
     file_ctx = gather_files_as(db, context_file_ids, as_role="context")
     q_ctx = gather_queries_as(db, results_query_ids, as_role="context")

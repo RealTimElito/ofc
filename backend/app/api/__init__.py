@@ -389,6 +389,19 @@ def create_document(body: DocumentIn, db: Session = Depends(get_db)):
     return row
 
 
+@router.patch("/documents/{doc_id}", response_model=DocumentOut)
+def update_document_role(doc_id: int, role: str, db: Session = Depends(get_db)):
+    if role not in ("context", "example", "both"):
+        raise HTTPException(400, "role must be context|example|both")
+    row = db.get(Document, doc_id)
+    if not row:
+        raise HTTPException(404, "Document not found")
+    row.role = role
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 @router.delete("/documents/{doc_id}")
 def delete_document(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(Document, doc_id)

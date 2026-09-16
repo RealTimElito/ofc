@@ -108,9 +108,10 @@ export default function AboutPage() {
             </li>
           </ul>
           <p className="about-note">
-            On each report, Examples set wording and house style; Context &amp; results set the
-            facts. The pipeline extracts style notes from examples and prefers those formulations
-            in draft and revise.
+            Nav <strong>Sources</strong> is where you upload/tag material. On each report,{" "}
+            <strong>Examples</strong> set wording and house style;{" "}
+            <strong>Context &amp; results</strong> set the facts. The pipeline extracts style
+            notes from examples and prefers those formulations in draft and revise.
           </p>
         </div>
       </div>
