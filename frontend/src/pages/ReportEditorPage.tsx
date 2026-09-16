@@ -31,6 +31,9 @@ type ThemeOption = {
 
 type BodyView = "split" | "edit" | "preview";
 
+/** Pre-generate LLM reachability from ping /models. */
+type LlmHealth = "idle" | "checking" | "ok" | "unreachable" | "empty";
+
 const EMPTY_THEME: ReportTheme = {
   heading_font: null,
   body_font: null,
@@ -87,6 +90,8 @@ export default function ReportEditorPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastErrorRun, setLastErrorRun] = useState<PipelineRun | null>(null);
+  const [llmHealth, setLlmHealth] = useState<LlmHealth>("idle");
+  const [llmHealthDetail, setLlmHealthDetail] = useState<string | null>(null);
   const [tab, setTab] = useState<"body" | "outline" | "critique" | "style">("body");
   const [bodyView, setBodyView] = useState<BodyView>("split");
   const [previewOpen, setPreviewOpen] = useState(true);
@@ -127,9 +132,42 @@ export default function ReportEditorPage() {
     }
   }
 
+  async function checkLlm(profileId: number | null) {
+    setLlmHealth("checking");
+    setLlmHealthDetail(null);
+    try {
+      const result =
+        profileId != null ? await api.pingProfile(profileId) : await api.pingDefault();
+      if (!result.ok) {
+        setLlmHealth("unreachable");
+        setLlmHealthDetail(`Endpoint returned HTTP ${result.status_code}.`);
+        return;
+      }
+      if (result.model_count === 0) {
+        setLlmHealth("empty");
+        setLlmHealthDetail(
+          "Endpoint is reachable but lists no models. Pull or load a model before generating.",
+        );
+        return;
+      }
+      setLlmHealth("ok");
+      setLlmHealthDetail(
+        result.model_count != null ? `${result.model_count} model(s) listed.` : null,
+      );
+    } catch (e) {
+      setLlmHealth("unreachable");
+      setLlmHealthDetail(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   useEffect(() => {
     void load().catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [reportId]);
+
+  useEffect(() => {
+    if (!report) return;
+    void checkLlm(report.llm_profile_id);
+  }, [report?.id, report?.llm_profile_id]);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -248,8 +286,25 @@ export default function ReportEditorPage() {
 
   const theme = report?.theme ?? EMPTY_THEME;
 
+  function llmLooksDown(): boolean {
+    return llmHealth === "unreachable" || llmHealth === "empty";
+  }
+
+  function confirmGenerateDespiteLlm(stage: string): boolean {
+    if (!llmLooksDown()) return true;
+    if (stage !== "full") return true;
+    const reason =
+      llmHealth === "empty"
+        ? "The configured LLM lists no models."
+        : "The configured LLM endpoint looks unreachable.";
+    return window.confirm(
+      `${reason} Full generate will likely fail and may take a while. Continue anyway?`,
+    );
+  }
+
   async function generate(stage: string) {
     if (!report) return;
+    if (!confirmGenerateDespiteLlm(stage)) return;
     setBusy(true);
     setError(null);
     setLastErrorRun(null);
@@ -472,6 +527,32 @@ export default function ReportEditorPage() {
         </div>
       )}
 
+      {llmLooksDown() && (
+        <div className="warn-banner" role="status">
+          <strong>
+            {llmHealth === "empty" ? "No LLM models listed" : "LLM endpoint unreachable"}
+          </strong>
+          <p className="warn-banner-detail">
+            {llmHealthDetail ||
+              "Fix the endpoint under LLM & settings before running Full generate."}{" "}
+            <Link to="/settings">Open LLM &amp; settings</Link>
+            {" · "}
+            <button
+              type="button"
+              className="linkish"
+              disabled={llmHealth === "checking"}
+              onClick={() => void checkLlm(report.llm_profile_id)}
+            >
+              Recheck
+            </button>
+          </p>
+        </div>
+      )}
+
+      {llmHealth === "checking" && (
+        <p className="empty llm-check-hint">Checking LLM endpoint…</p>
+      )}
+
       <div className="editor-layout">
         <div className="editor-controls">
           <div className="panel">
@@ -503,6 +584,11 @@ export default function ReportEditorPage() {
                 </option>
               ))}
             </select>
+            {llmHealth === "ok" && llmHealthDetail && (
+              <p className="empty" style={{ paddingTop: "0.5rem", marginBottom: 0 }}>
+                {llmHealthDetail}
+              </p>
+            )}
           </div>
 
           <div className="panel">
@@ -727,7 +813,16 @@ export default function ReportEditorPage() {
             <h2>Pipeline</h2>
             <p className="field-hint">Generate stages against your brief, examples, and context.</p>
             <div className="row">
-              <button type="button" disabled={busy} onClick={() => void generate("full")}>
+              <button
+                type="button"
+                disabled={busy}
+                title={
+                  llmLooksDown()
+                    ? "LLM looks unavailable — you will be asked to confirm"
+                    : undefined
+                }
+                onClick={() => void generate("full")}
+              >
                 Full generate
               </button>
               <button

@@ -106,8 +106,18 @@ class LlmClient:
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(url, headers=headers)
+            model_count: int | None = None
+            try:
+                payload = response.json()
+                if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+                    model_count = len(payload["data"])
+                elif isinstance(payload, list):
+                    model_count = len(payload)
+            except Exception:  # noqa: BLE001
+                model_count = None
             return {
                 "ok": response.status_code < 400,
                 "status_code": response.status_code,
+                "model_count": model_count,
                 "body_preview": response.text[:500],
             }

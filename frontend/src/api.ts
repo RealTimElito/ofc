@@ -89,6 +89,13 @@ export type PipelineRun = {
   created_at: string;
 };
 
+export type LlmPingResult = {
+  ok: boolean;
+  status_code: number;
+  model_count?: number | null;
+  body_preview?: string;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
   if (!res.ok) {
@@ -123,11 +130,11 @@ export const api = {
     }),
   deleteProfile: (id: number) => request(`/api/llm/profiles/${id}`, { method: "DELETE" }),
   pingProfile: (id: number) =>
-    request<{ ok: boolean; status_code: number }>(`/api/llm/profiles/${id}/ping`, {
+    request<LlmPingResult>(`/api/llm/profiles/${id}/ping`, {
       method: "POST",
     }),
   pingDefault: () =>
-    request<{ ok: boolean; status_code: number }>("/api/llm/ping-default", { method: "POST" }),
+    request<LlmPingResult>("/api/llm/ping-default", { method: "POST" }),
 
   listFiles: () => request<UploadedFile[]>("/api/files"),
   uploadFile: async (file: File, role: string) => {

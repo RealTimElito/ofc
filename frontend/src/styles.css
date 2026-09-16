@@ -850,6 +850,53 @@ th {
   margin: 0.35rem 0 0;
 }
 
+.warn-banner {
+  background: color-mix(in srgb, var(--warn) 12%, white);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+  color: var(--warn);
+  padding: 0.85rem 1.1rem;
+  border-radius: 8px;
+  margin-bottom: var(--space-4);
+}
+
+.warn-banner strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.warn-banner-detail {
+  margin: 0;
+  color: color-mix(in srgb, var(--warn) 70%, var(--ink));
+  font-size: 0.95rem;
+}
+
+.warn-banner a {
+  color: var(--accent-deep);
+}
+
+button.linkish {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  color: var(--accent-deep);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+button.linkish:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.llm-check-hint {
+  margin-top: 0;
+  margin-bottom: var(--space-3);
+  padding-top: 0;
+}
+
 .empty {
   color: var(--ink-soft);
   font-style: italic;
