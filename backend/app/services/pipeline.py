@@ -11,6 +11,11 @@ from app.config import get_settings
 from app.models import LlmProfile, PipelineRun, ReportProject
 from app.services.context import build_context_pack, has_real_examples
 from app.services.llm import LlmClient, config_from_profile, config_from_settings
+from app.services.style_cache import (
+    fingerprint_examples,
+    load_style_notes,
+    save_style_notes,
+)
 
 
 STYLE_NOTES_PROMPT = """You analyze example reports to extract reusable *writing style* signals.
@@ -179,6 +184,17 @@ class ReportPipeline:
         notes = (getattr(self.project, "style_notes_md", None) or "").strip()
         return notes or NO_STYLE_NOTES
 
+    def _examples_fingerprint(self) -> str:
+        return fingerprint_examples(self.pack.get("examples") or "")
+
+    def _apply_style_notes(self, notes: str, key: str, *, from_cache: bool) -> str:
+        self.project.style_notes_md = notes
+        self.project.style_notes_key = key
+        self.db.commit()
+        source = "cache" if from_cache else "llm"
+        self._log_run("style_notes", "ok", f"[{source}] {notes[:1900]}")
+        return notes
+
     def _log_run(self, stage: str, status: str, log_text: str = "") -> PipelineRun:
         run = PipelineRun(
             project_id=self.project.id,
@@ -191,23 +207,35 @@ class ReportPipeline:
         self.db.refresh(run)
         return run
 
-    async def run_style_notes(self) -> str:
+    async def run_style_notes(self, *, force: bool = False) -> str:
         """Extract reusable formulation signals from attached examples."""
         if not has_real_examples(self.pack["examples"]):
             self.project.style_notes_md = ""
+            self.project.style_notes_key = ""
             self.db.commit()
             self._log_run("style_notes", "skipped", "no examples attached")
             return ""
+
+        key = self._examples_fingerprint()
+        settings = get_settings()
+        settings.ensure_dirs()
+
+        if not force:
+            existing = (getattr(self.project, "style_notes_md", None) or "").strip()
+            existing_key = getattr(self.project, "style_notes_key", None) or ""
+            if existing and existing_key == key:
+                return existing
+            cached = load_style_notes(settings.style_cache_dir, key)
+            if cached:
+                return self._apply_style_notes(cached, key, from_cache=True)
 
         self.project.status = "style_notes"
         self.db.commit()
         prompt = STYLE_NOTES_PROMPT.format(examples=self.pack["examples"])
         try:
             notes = await self.client.chat(prompt, temperature=0.2)
-            self.project.style_notes_md = notes
-            self.db.commit()
-            self._log_run("style_notes", "ok", notes[:2000])
-            return notes
+            save_style_notes(settings.style_cache_dir, key, notes)
+            return self._apply_style_notes(notes, key, from_cache=False)
         except Exception as exc:  # noqa: BLE001
             self.project.status = "error"
             self.db.commit()
@@ -216,14 +244,14 @@ class ReportPipeline:
 
     async def ensure_style_notes(self) -> str:
         if not has_real_examples(self.pack["examples"]):
-            if getattr(self.project, "style_notes_md", None):
+            if getattr(self.project, "style_notes_md", None) or getattr(
+                self.project, "style_notes_key", None
+            ):
                 self.project.style_notes_md = ""
+                self.project.style_notes_key = ""
                 self.db.commit()
             return ""
-        existing = (getattr(self.project, "style_notes_md", None) or "").strip()
-        if existing:
-            return existing
-        return await self.run_style_notes()
+        return await self.run_style_notes(force=False)
 
     async def run_outline(self) -> str:
         await self.ensure_style_notes()
@@ -326,7 +354,7 @@ class ReportPipeline:
             raise
 
     async def run_full(self, with_critique: bool = True) -> ReportProject:
-        await self.run_style_notes()
+        await self.run_style_notes(force=False)
         await self.run_outline()
         await self.run_draft()
         if with_critique:

@@ -126,9 +126,13 @@ class ReportProject(Base):
     )
     status: Mapped[str] = mapped_column(String(32), default="draft")
     style_notes_md: Mapped[str] = mapped_column(Text, default="")
+    # Fingerprint of the examples blob used to produce style_notes_md
+    style_notes_key: Mapped[str] = mapped_column(String(64), default="")
     outline_md: Mapped[str] = mapped_column(Text, default="")
     body_md: Mapped[str] = mapped_column(Text, default="")
     critique_md: Mapped[str] = mapped_column(Text, default="")
+    # JSON: fonts, header/footer text, logo filenames under themes/{id}/
+    theme_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

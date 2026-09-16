@@ -45,8 +45,10 @@ export default function AboutPage() {
             run the pipeline.
           </li>
           <li>
-            Edit the draft with live Markdown preview, then export Markdown, HTML, or Word{" "}
-            (<code>.docx</code>).
+            Edit the draft with the Markdown formatting bar and live preview, then export
+            Markdown, HTML, or Word (<code>.docx</code>). Optionally import a visual theme
+            (fonts, header/footer, logos) from a <code>.docx</code> example for Word export;
+            preview chrome is simplified and browser fonts may not match Word exactly.
           </li>
           <li>
             <strong>Mark done</strong> archives the report into the document library so later jobs
@@ -121,6 +123,11 @@ export default function AboutPage() {
           <li>The UI build does not load fonts or scripts from the public internet at runtime.</li>
           <li>
             Sample demo data lives in <code>data/samples/</code> if you ran the seed script.
+          </li>
+          <li>
+            Theme import reads only local <code>.docx</code> uploads (or library docs backed by
+            one). It is not a full Word clone — complex headers, floating shapes, and exact font
+            embedding are out of scope.
           </li>
         </ul>
       </div>

@@ -1,9 +1,25 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import AboutPage from "./pages/AboutPage";
 import ReportsPage from "./pages/ReportsPage";
 import ReportEditorPage from "./pages/ReportEditorPage";
 import SourcesPage from "./pages/SourcesPage";
 import SettingsPage from "./pages/SettingsPage";
+
+function MainShell() {
+  const location = useLocation();
+  const fluid = location.pathname.startsWith("/reports/");
+  return (
+    <main className={fluid ? "main main-fluid" : "main"}>
+      <Routes>
+        <Route path="/" element={<ReportsPage />} />
+        <Route path="/reports/:id" element={<ReportEditorPage />} />
+        <Route path="/sources" element={<SourcesPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/about" element={<AboutPage />} />
+      </Routes>
+    </main>
+  );
+}
 
 export default function App() {
   return (
@@ -23,15 +39,7 @@ export default function App() {
         </nav>
         <div className="airgap-badge">Air-gapped mode · local endpoints only</div>
       </aside>
-      <main className="main">
-        <Routes>
-          <Route path="/" element={<ReportsPage />} />
-          <Route path="/reports/:id" element={<ReportEditorPage />} />
-          <Route path="/sources" element={<SourcesPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/about" element={<AboutPage />} />
-        </Routes>
-      </main>
+      <MainShell />
     </div>
   );
 }

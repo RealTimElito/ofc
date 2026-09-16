@@ -50,6 +50,16 @@ export type LibraryDocument = {
   updated_at: string;
 };
 
+export type ReportTheme = {
+  heading_font: string | null;
+  body_font: string | null;
+  header_text: string;
+  footer_text: string;
+  header_logo: string | null;
+  footer_logo: string | null;
+  source_label: string;
+};
+
 export type ReportProject = {
   id: number;
   title: string;
@@ -65,6 +75,7 @@ export type ReportProject = {
   outline_md: string;
   body_md: string;
   critique_md: string;
+  theme?: ReportTheme;
   created_at: string;
   updated_at: string;
 };
@@ -182,4 +193,25 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role }),
     }),
+  importTheme: (id: number, source: "file" | "document", sourceId: number) =>
+    request<ReportProject>(`/api/reports/${id}/theme/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, source_id: sourceId }),
+    }),
+  clearTheme: (id: number) =>
+    request<ReportProject>(`/api/reports/${id}/theme`, { method: "DELETE" }),
+  contextPreview: (id: number) =>
+    request<{
+      title: string;
+      brief_chars: number;
+      results_chars: number;
+      examples_chars: number;
+      has_examples: boolean;
+      style_notes_key: string;
+      style_notes_cached: boolean;
+      style_notes_on_project: boolean;
+      results_preview: string;
+      examples_preview: string;
+    }>(`/api/reports/${id}/context-preview`),
 };

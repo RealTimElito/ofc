@@ -49,6 +49,17 @@ class Settings(BaseSettings):
         return self.ofc_data_dir / "reports"
 
     @property
+    def themes_dir(self) -> Path:
+        return self.ofc_data_dir / "themes"
+
+    def theme_assets_dir(self, report_id: int) -> Path:
+        return self.themes_dir / f"report_{report_id}"
+
+    @property
+    def style_cache_dir(self) -> Path:
+        return self.ofc_data_dir / "style_cache"
+
+    @property
     def db_path(self) -> Path:
         return self.ofc_data_dir / "db" / "ofc.sqlite3"
 
@@ -57,6 +68,8 @@ class Settings(BaseSettings):
             self.ofc_data_dir,
             self.uploads_dir,
             self.reports_dir,
+            self.themes_dir,
+            self.style_cache_dir,
             self.db_path.parent,
         ):
             path.mkdir(parents=True, exist_ok=True)

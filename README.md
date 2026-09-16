@@ -24,6 +24,15 @@ UI (React)  →  API (FastAPI)  →  LLM endpoint (your LAN)
 Pipeline stages: **style notes → outline → draft → critique → revise** (or run one stage at a time).
 When examples are attached, style notes capture formulation signals (phrases, voice, section
 naming, metrics/hedging) so later stages prefer that language without copying example-only facts.
+Style notes are **cached on disk** per example-set fingerprint (`data/style_cache/`) so identical
+example packs skip re-extraction.
+
+### Training vs retrieval (small corpora)
+
+Continuously fine-tuning / “training” on every stored report is a **poor default under ~1000
+documents**: costly, brittle offline, and needs an eval harness. Prefer attaching the best
+example reports, the style-notes stage, and the cheap style-notes cache. Optional later work:
+local similarity ranking of examples — not model-weight training.
 
 ## Quick start
 
@@ -70,7 +79,8 @@ For true air-gap: build on a connected host, `docker save` the images, transfer,
      - `purpose=results` → metrics/tables for the new report
      - `purpose=examples` → prior report bodies (`example_body_column`)
 3. **Reports** — create a project, write the brief, tick files/queries, run **Full generate**
-4. Edit the draft; export Markdown or HTML
+4. Optionally **Import theme** from a `.docx` example (fonts, header/footer, logos) for Word export
+5. Edit the draft; export Markdown, HTML, or `.docx`
 
 ### Sample DB hints
 

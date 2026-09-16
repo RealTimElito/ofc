@@ -32,6 +32,8 @@ def _ensure_sqlite_columns(engine) -> None:
         "example_file_ids_json": "TEXT DEFAULT '[]'",
         "use_all_examples": "BOOLEAN DEFAULT 1",
         "style_notes_md": "TEXT DEFAULT ''",
+        "style_notes_key": "TEXT DEFAULT ''",
+        "theme_json": "TEXT DEFAULT '{}'",
     }
     with engine.begin() as conn:
         rows = conn.execute(text("PRAGMA table_info(report_projects)")).fetchall()

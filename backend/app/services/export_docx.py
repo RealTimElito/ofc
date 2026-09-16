@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import re
 from io import BytesIO
-from typing import Iterable
+from pathlib import Path
+from typing import Any, Iterable, Optional
 
 from docx import Document
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
+
+from app.services.theme import apply_theme_to_document, empty_theme
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -22,49 +25,57 @@ _INLINE_RE = re.compile(
 )
 
 
-def _set_run_font(run, *, mono: bool = False) -> None:
-    run.font.size = Pt(10 if mono else 11)
-    if mono:
-        run.font.name = "Courier New"
-        r_pr = run._element.get_or_add_rPr()
-        r_fonts = r_pr.get_or_add_rFonts()
-        r_fonts.set(qn("w:ascii"), "Courier New")
-        r_fonts.set(qn("w:hAnsi"), "Courier New")
+def _set_run_font(
+    run,
+    *,
+    mono: bool = False,
+    body_font: str = "Calibri",
+    size_pt: float | None = None,
+) -> None:
+    run.font.size = Pt(size_pt if size_pt is not None else (10 if mono else 11))
+    name = "Courier New" if mono else body_font
+    run.font.name = name
+    r_pr = run._element.get_or_add_rPr()
+    r_fonts = r_pr.get_or_add_rFonts()
+    r_fonts.set(qn("w:ascii"), name)
+    r_fonts.set(qn("w:hAnsi"), name)
 
 
-def _add_inline_runs(paragraph, text: str) -> None:
+def _add_inline_runs(
+    paragraph, text: str, *, body_font: str = "Calibri"
+) -> None:
     if not text:
         return
     pos = 0
     for match in _INLINE_RE.finditer(text):
         if match.start() > pos:
             run = paragraph.add_run(text[pos : match.start()])
-            _set_run_font(run)
+            _set_run_font(run, body_font=body_font)
         token = match.group(0)
         if token.startswith("**") or token.startswith("__"):
             run = paragraph.add_run(token[2:-2])
             run.bold = True
-            _set_run_font(run)
+            _set_run_font(run, body_font=body_font)
         elif token.startswith("`"):
             run = paragraph.add_run(token[1:-1])
             _set_run_font(run, mono=True)
         elif token.startswith("*") or token.startswith("_"):
             run = paragraph.add_run(token[1:-1])
             run.italic = True
-            _set_run_font(run)
+            _set_run_font(run, body_font=body_font)
         elif token.startswith("["):
             label, _, rest = token[1:].partition("](")
             url = rest[:-1] if rest.endswith(")") else rest
             run = paragraph.add_run(label or url)
             run.font.color.rgb = RGBColor(0x0F, 0x43, 0x38)
             run.underline = True
-            _set_run_font(run)
+            _set_run_font(run, body_font=body_font)
             if url:
                 paragraph.add_run(f" ({url})")
         pos = match.end()
     if pos < len(text):
         run = paragraph.add_run(text[pos:])
-        _set_run_font(run)
+        _set_run_font(run, body_font=body_font)
 
 
 def _split_table_row(line: str) -> list[str]:
@@ -76,7 +87,13 @@ def _split_table_row(line: str) -> list[str]:
     return [c.strip() for c in raw.split("|")]
 
 
-def _add_table(doc: Document, header: list[str], rows: list[list[str]]) -> None:
+def _add_table(
+    doc: Document,
+    header: list[str],
+    rows: list[list[str]],
+    *,
+    body_font: str,
+) -> None:
     table = doc.add_table(rows=1 + len(rows), cols=len(header))
     table.style = "Table Grid"
     for i, cell_text in enumerate(header):
@@ -85,14 +102,14 @@ def _add_table(doc: Document, header: list[str], rows: list[list[str]]) -> None:
         p = cell.paragraphs[0]
         run = p.add_run(cell_text)
         run.bold = True
-        _set_run_font(run)
+        _set_run_font(run, body_font=body_font)
     for r_idx, row in enumerate(rows):
         for c_idx in range(len(header)):
             cell = table.rows[r_idx + 1].cells[c_idx]
             cell.text = ""
             p = cell.paragraphs[0]
             value = row[c_idx] if c_idx < len(row) else ""
-            _add_inline_runs(p, value)
+            _add_inline_runs(p, value, body_font=body_font)
     doc.add_paragraph("")
 
 
@@ -106,15 +123,34 @@ def _add_code_block(doc: Document, lines: Iterable[str]) -> None:
     doc.add_paragraph("")
 
 
-def markdown_to_docx_bytes(title: str, body_md: str) -> bytes:
+def markdown_to_docx_bytes(
+    title: str,
+    body_md: str,
+    *,
+    theme: Optional[dict[str, Any]] = None,
+    theme_assets_dir: Optional[Path] = None,
+) -> bytes:
     """Build a .docx from Markdown. Legacy .doc is not supported."""
+    theme = theme or empty_theme()
+    body_font = theme.get("body_font") or "Calibri"
+    heading_font = theme.get("heading_font") or body_font
+
     doc = Document()
     style = doc.styles["Normal"]
-    style.font.name = "Calibri"
+    style.font.name = body_font
     style.font.size = Pt(11)
+
+    if theme_assets_dir is not None and any(
+        theme.get(k) for k in ("header_text", "footer_text", "header_logo", "footer_logo")
+    ):
+        apply_theme_to_document(doc, theme, theme_assets_dir)
+    elif theme.get("body_font") or theme.get("heading_font"):
+        apply_theme_to_document(doc, theme, theme_assets_dir or Path("."))
 
     heading = doc.add_heading(title or "Report", level=0)
     heading.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+    for run in heading.runs:
+        _set_run_font(run, body_font=heading_font, size_pt=18)
 
     lines = (body_md or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
     i = 0
@@ -129,7 +165,7 @@ def markdown_to_docx_bytes(title: str, body_md: str) -> bytes:
         if not text:
             return
         p = doc.add_paragraph()
-        _add_inline_runs(p, text)
+        _add_inline_runs(p, text, body_font=body_font)
 
     while i < len(lines):
         line = lines[i]
@@ -158,7 +194,7 @@ def markdown_to_docx_bytes(title: str, body_md: str) -> bytes:
                 rows.append(_split_table_row(lines[i]))
                 i += 1
             if header:
-                _add_table(doc, header, rows)
+                _add_table(doc, header, rows, body_font=body_font)
             continue
 
         if not stripped:
@@ -180,7 +216,7 @@ def markdown_to_docx_bytes(title: str, body_md: str) -> bytes:
             level = min(len(heading_match.group(1)), 4)
             h = doc.add_heading(heading_match.group(2).strip(), level=level)
             for run in h.runs:
-                _set_run_font(run)
+                _set_run_font(run, body_font=heading_font)
             i += 1
             continue
 
@@ -188,7 +224,7 @@ def markdown_to_docx_bytes(title: str, body_md: str) -> bytes:
         if ul:
             flush_para()
             p = doc.add_paragraph(style="List Bullet")
-            _add_inline_runs(p, ul.group(3))
+            _add_inline_runs(p, ul.group(3), body_font=body_font)
             i += 1
             continue
 
@@ -196,7 +232,7 @@ def markdown_to_docx_bytes(title: str, body_md: str) -> bytes:
         if ol:
             flush_para()
             p = doc.add_paragraph(style="List Number")
-            _add_inline_runs(p, ol.group(3))
+            _add_inline_runs(p, ol.group(3), body_font=body_font)
             i += 1
             continue
 

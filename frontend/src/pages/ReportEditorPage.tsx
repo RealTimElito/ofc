@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
   LibraryDocument,
   LlmProfile,
   ReportProject,
+  ReportTheme,
   SavedQuery,
   UploadedFile,
 } from "../api";
 import { markdownToHtml } from "../markdownPreview";
+import { applyMarkdownAction, MdAction } from "../markdownToolbar";
 
 type ExampleOption = {
   key: string;
@@ -18,7 +20,25 @@ type ExampleOption = {
   meta: string;
 };
 
+type ThemeOption = {
+  key: string;
+  kind: "file" | "document";
+  id: number;
+  label: string;
+  meta: string;
+};
+
 type BodyView = "split" | "edit" | "preview";
+
+const EMPTY_THEME: ReportTheme = {
+  heading_font: null,
+  body_font: null,
+  header_text: "",
+  footer_text: "",
+  header_logo: null,
+  footer_logo: null,
+  source_label: "",
+};
 
 function normalizeReport(r: ReportProject): ReportProject {
   return {
@@ -26,8 +46,34 @@ function normalizeReport(r: ReportProject): ReportProject {
     document_ids: r.document_ids ?? [],
     example_file_ids: r.example_file_ids ?? [],
     use_all_examples: r.use_all_examples ?? true,
+    theme: r.theme ?? EMPTY_THEME,
   };
 }
+
+function themeIsSet(theme: ReportTheme | undefined): boolean {
+  if (!theme) return false;
+  return Boolean(
+    theme.source_label ||
+      theme.heading_font ||
+      theme.body_font ||
+      theme.header_text ||
+      theme.footer_text ||
+      theme.header_logo ||
+      theme.footer_logo,
+  );
+}
+
+const FORMAT_ACTIONS: { action: MdAction; label: string; title: string }[] = [
+  { action: "bold", label: "B", title: "Bold" },
+  { action: "italic", label: "I", title: "Italic" },
+  { action: "h1", label: "H1", title: "Heading 1" },
+  { action: "h2", label: "H2", title: "Heading 2" },
+  { action: "h3", label: "H3", title: "Heading 3" },
+  { action: "ul", label: "• List", title: "Bullet list" },
+  { action: "ol", label: "1. List", title: "Numbered list" },
+  { action: "link", label: "Link", title: "Insert link" },
+  { action: "code", label: "</>", title: "Inline code" },
+];
 
 export default function ReportEditorPage() {
   const { id } = useParams();
@@ -39,12 +85,16 @@ export default function ReportEditorPage() {
   const [profiles, setProfiles] = useState<LlmProfile[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"body" | "outline" | "critique">("body");
+  const [tab, setTab] = useState<"body" | "outline" | "critique" | "style">("body");
   const [bodyView, setBodyView] = useState<BodyView>("split");
   const [previewOpen, setPreviewOpen] = useState(true);
   const [exampleSearch, setExampleSearch] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [themeSearch, setThemeSearch] = useState("");
+  const [themePickerOpen, setThemePickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const themePickerRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   async function load() {
     const [r, f, d, q, p] = await Promise.all([
@@ -68,6 +118,7 @@ export default function ReportEditorPage() {
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!pickerRef.current?.contains(e.target as Node)) setPickerOpen(false);
+      if (!themePickerRef.current?.contains(e.target as Node)) setThemePickerOpen(false);
     }
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
@@ -114,6 +165,32 @@ export default function ReportEditorPage() {
     return [...fromDocs, ...fromFiles];
   }, [files, documents]);
 
+  const themeOptions: ThemeOption[] = useMemo(() => {
+    const fromFiles: ThemeOption[] = files
+      .filter((f) => f.original_name.toLowerCase().endsWith(".docx"))
+      .map((f) => ({
+        key: `file-${f.id}`,
+        kind: "file" as const,
+        id: f.id,
+        label: f.original_name,
+        meta: `upload · ${f.role}`,
+      }));
+    const fromDocs: ThemeOption[] = documents
+      .filter(
+        (d) =>
+          (d.format || "").toLowerCase() === "docx" ||
+          (d.filename || "").toLowerCase().endsWith(".docx"),
+      )
+      .map((d) => ({
+        key: `doc-${d.id}`,
+        kind: "document" as const,
+        id: d.id,
+        label: d.title,
+        meta: d.filename ? `library · ${d.filename}` : "library · docx",
+      }));
+    return [...fromFiles, ...fromDocs];
+  }, [files, documents]);
+
   const filteredExamples = useMemo(() => {
     const q = exampleSearch.trim().toLowerCase();
     if (!q) return exampleOptions;
@@ -123,6 +200,16 @@ export default function ReportEditorPage() {
         o.meta.toLowerCase().includes(q),
     );
   }, [exampleOptions, exampleSearch]);
+
+  const filteredThemes = useMemo(() => {
+    const q = themeSearch.trim().toLowerCase();
+    if (!q) return themeOptions;
+    return themeOptions.filter(
+      (o) =>
+        o.label.toLowerCase().includes(q) ||
+        o.meta.toLowerCase().includes(q),
+    );
+  }, [themeOptions, themeSearch]);
 
   const selectedExampleChips = useMemo(() => {
     if (!report) return [];
@@ -142,6 +229,8 @@ export default function ReportEditorPage() {
     () => markdownToHtml(report?.body_md || ""),
     [report?.body_md],
   );
+
+  const theme = report?.theme ?? EMPTY_THEME;
 
   async function generate(stage: string) {
     if (!report) return;
@@ -164,6 +253,7 @@ export default function ReportEditorPage() {
       setReport(normalizeReport(updated));
       if (stage === "outline") setTab("outline");
       else if (stage === "critique") setTab("critique");
+      else if (stage === "style_notes") setTab("style");
       else setTab("body");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -181,6 +271,36 @@ export default function ReportEditorPage() {
       const result = await api.markDone(report.id);
       setReport(normalizeReport(result.report));
       setDocuments(await api.listDocuments());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importTheme(opt: ThemeOption) {
+    if (!report) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await api.importTheme(report.id, opt.kind, opt.id);
+      setReport(normalizeReport(updated));
+      setThemeSearch("");
+      setThemePickerOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clearTheme() {
+    if (!report) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await api.clearTheme(report.id);
+      setReport(normalizeReport(updated));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -218,6 +338,21 @@ export default function ReportEditorPage() {
     }
   }
 
+  function runFormat(action: MdAction) {
+    if (!report) return;
+    const el = bodyRef.current;
+    const start = el?.selectionStart ?? report.body_md.length;
+    const end = el?.selectionEnd ?? start;
+    const next = applyMarkdownAction(report.body_md, start, end, action);
+    setReport({ ...report, body_md: next.value });
+    requestAnimationFrame(() => {
+      const ta = bodyRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(next.start, next.end);
+    });
+  }
+
   if (!report) {
     return <p className="empty">{error || "Loading…"}</p>;
   }
@@ -225,6 +360,12 @@ export default function ReportEditorPage() {
   const allExampleCount = exampleOptions.length;
   const showEditor = bodyView === "edit" || bodyView === "split";
   const showPreview = previewOpen && (bodyView === "preview" || bodyView === "split");
+  const previewStyle: CSSProperties = {
+    ...(theme.body_font ? { fontFamily: `"${theme.body_font}", var(--font-display)` } : {}),
+  };
+  const previewHeadingStyle: CSSProperties | undefined = theme.heading_font
+    ? ({ ["--preview-heading-font" as string]: `"${theme.heading_font}", var(--font-ui)` } as CSSProperties)
+    : undefined;
 
   return (
     <>
@@ -275,8 +416,8 @@ export default function ReportEditorPage() {
 
       {error && <div className="error-banner">{error}</div>}
 
-      <div className="grid-2 editor-layout">
-        <div className="stack">
+      <div className="editor-layout">
+        <div className="editor-controls">
           <div className="panel">
             <h2>Brief</h2>
             <p className="field-hint">What should this report cover? Which results matter?</p>
@@ -306,6 +447,73 @@ export default function ReportEditorPage() {
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="panel">
+            <h2>Visual theme</h2>
+            <p className="field-hint">
+              Import fonts, header/footer text, and logos from a <code>.docx</code> example for
+              Word export (preview shows simplified chrome). Not a full Word clone.
+            </p>
+            <div className="example-picker" ref={themePickerRef}>
+              <div className="search-select">
+                <input
+                  type="search"
+                  placeholder="Import theme from…"
+                  value={themeSearch}
+                  onChange={(e) => {
+                    setThemeSearch(e.target.value);
+                    setThemePickerOpen(true);
+                  }}
+                  onFocus={() => setThemePickerOpen(true)}
+                />
+                {themePickerOpen && (
+                  <ul className="search-select-menu">
+                    {filteredThemes.length === 0 ? (
+                      <li className="empty-option">
+                        No .docx sources — upload an example under Sources
+                      </li>
+                    ) : (
+                      filteredThemes.map((opt) => (
+                        <li key={opt.key}>
+                          <button type="button" disabled={busy} onClick={() => void importTheme(opt)}>
+                            <span>{opt.label}</span>
+                            <small>{opt.meta}</small>
+                          </button>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                )}
+              </div>
+            </div>
+            {themeIsSet(theme) ? (
+              <div className="theme-summary">
+                <p className="field-hint" style={{ marginBottom: "0.4rem" }}>
+                  Active: <strong>{theme.source_label || "custom"}</strong>
+                  {theme.heading_font || theme.body_font
+                    ? ` · ${[theme.heading_font, theme.body_font].filter(Boolean).join(" / ")}`
+                    : ""}
+                </p>
+                {(theme.header_text || theme.footer_text) && (
+                  <p className="empty" style={{ paddingTop: 0 }}>
+                    {theme.header_text ? `Header: ${theme.header_text}` : ""}
+                    {theme.header_text && theme.footer_text ? " · " : ""}
+                    {theme.footer_text ? `Footer: ${theme.footer_text}` : ""}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => void clearTheme()}
+                >
+                  Clear theme
+                </button>
+              </div>
+            ) : (
+              <p className="empty">No visual theme applied yet.</p>
+            )}
           </div>
 
           <div className="panel">
@@ -470,6 +678,14 @@ export default function ReportEditorPage() {
                 type="button"
                 className="secondary"
                 disabled={busy}
+                onClick={() => void generate("style_notes")}
+              >
+                Style notes
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy}
                 onClick={() => void generate("outline")}
               >
                 Outline
@@ -500,8 +716,8 @@ export default function ReportEditorPage() {
               </button>
             </div>
             <p className="empty" style={{ marginBottom: 0 }}>
-              Full = style notes → outline → draft → critique → revise. Needs a reachable local
-              LLM.
+              Full = style notes → outline → draft → critique → revise. Style notes are cached per
+              example set (no model fine-tuning). Needs a reachable local LLM with a pulled model.
             </p>
           </div>
 
@@ -531,6 +747,13 @@ export default function ReportEditorPage() {
                 onClick={() => setTab("outline")}
               >
                 Outline
+              </button>
+              <button
+                type="button"
+                className={tab === "style" ? "" : "secondary"}
+                onClick={() => setTab("style")}
+              >
+                Style notes
               </button>
               <button
                 type="button"
@@ -582,6 +805,24 @@ export default function ReportEditorPage() {
             )}
           </div>
 
+          {tab === "body" && showEditor && (
+            <div className="md-format-bar" role="toolbar" aria-label="Markdown formatting">
+              {FORMAT_ACTIONS.map((item) => (
+                <button
+                  key={item.action}
+                  type="button"
+                  className={`secondary format-btn format-${item.action}`}
+                  title={item.title}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => runFormat(item.action)}
+                >
+                  {item.label}
+                </button>
+              ))}
+              <span className="pane-hint format-hint">Inserts Markdown around the selection</span>
+            </div>
+          )}
+
           {tab === "body" && (
             <div
               className={[
@@ -607,6 +848,7 @@ export default function ReportEditorPage() {
                   >
                     <textarea
                       id="draft-body"
+                      ref={bodyRef}
                       className="report-body"
                       value={report.body_md}
                       onChange={(e) => setReport({ ...report, body_md: e.target.value })}
@@ -626,11 +868,37 @@ export default function ReportEditorPage() {
                   <div
                     className="preview-panel resizable-pane"
                     title="Drag the bottom-right corner to resize"
+                    style={previewHeadingStyle}
                   >
+                    {themeIsSet(theme) && (
+                      <div className="preview-chrome preview-chrome-header">
+                        {theme.header_logo && (
+                          <img
+                            src={`/api/reports/${report.id}/theme/assets/${theme.header_logo}`}
+                            alt=""
+                            className="preview-logo"
+                          />
+                        )}
+                        {theme.header_text && <span>{theme.header_text}</span>}
+                      </div>
+                    )}
                     <div
                       className="md-preview"
+                      style={previewStyle}
                       dangerouslySetInnerHTML={{ __html: previewHtml }}
                     />
+                    {themeIsSet(theme) && (theme.footer_text || theme.footer_logo) && (
+                      <div className="preview-chrome preview-chrome-footer">
+                        {theme.footer_logo && (
+                          <img
+                            src={`/api/reports/${report.id}/theme/assets/${theme.footer_logo}`}
+                            alt=""
+                            className="preview-logo"
+                          />
+                        )}
+                        {theme.footer_text && <span>{theme.footer_text}</span>}
+                      </div>
+                    )}
                     <div className="resize-grip" aria-hidden="true" />
                   </div>
                 </div>
@@ -647,6 +915,20 @@ export default function ReportEditorPage() {
                 onChange={(e) => setReport({ ...report, outline_md: e.target.value })}
                 onBlur={() => void save({ outline_md: report.outline_md })}
                 placeholder="Outline stage output"
+              />
+            </>
+          )}
+          {tab === "style" && (
+            <>
+              <p className="field-hint">
+                Formulation signals extracted from examples (cached per example set). Re-run Style
+                notes to refresh after changing examples.
+              </p>
+              <textarea
+                className="report-body"
+                value={report.style_notes_md || ""}
+                readOnly
+                placeholder="No style notes yet — attach examples and run Style notes (needs a local LLM model)."
               />
             </>
           )}

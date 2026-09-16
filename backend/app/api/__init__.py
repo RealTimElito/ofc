@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from pathlib import Path
 
@@ -26,9 +27,11 @@ from app.api.schemas import (
     ReportProjectIn,
     ReportProjectOut,
     ReportProjectUpdate,
+    ReportTheme,
     SavedQueryIn,
     SavedQueryOut,
     SettingsOut,
+    ThemeImportIn,
 )
 from app.config import get_settings
 from app.db.session import get_db
@@ -47,6 +50,12 @@ from app.services.docs import read_upload_text
 from app.services.export_docx import markdown_to_docx_bytes
 from app.services.llm import LlmClient, config_from_profile, config_from_settings
 from app.services.pipeline import ReportPipeline
+from app.services.theme import (
+    empty_theme,
+    extract_theme_from_docx,
+    parse_theme_json,
+    theme_to_json,
+)
 
 router = APIRouter()
 
@@ -66,6 +75,11 @@ def _profile_out(p: LlmProfile) -> LlmProfileOut:
     )
 
 
+def _theme_out(p: ReportProject) -> ReportTheme:
+    data = parse_theme_json(getattr(p, "theme_json", None) or "{}")
+    return ReportTheme(**{k: data.get(k) for k in empty_theme()})
+
+
 def _project_out(p: ReportProject) -> ReportProjectOut:
     return ReportProjectOut(
         id=p.id,
@@ -82,9 +96,49 @@ def _project_out(p: ReportProject) -> ReportProjectOut:
         outline_md=p.outline_md,
         body_md=p.body_md,
         critique_md=p.critique_md,
+        theme=_theme_out(p),
         created_at=p.created_at,
         updated_at=p.updated_at,
     )
+
+
+def _resolve_docx_path(db: Session, source: str, source_id: int) -> tuple[Path, str]:
+    """Return (docx path, label) for theme extraction."""
+    if source == "file":
+        row = db.get(UploadedFile, source_id)
+        if not row:
+            raise HTTPException(404, "Upload not found")
+        path = Path(row.stored_path)
+        if path.suffix.lower() != ".docx":
+            raise HTTPException(400, "Theme import needs a .docx upload")
+        if not path.is_file():
+            raise HTTPException(404, "Upload file missing on disk")
+        return path, row.original_name
+
+    if source == "document":
+        doc = db.get(Document, source_id)
+        if not doc:
+            raise HTTPException(404, "Document not found")
+        label = doc.filename or doc.title
+        # Prefer a matching upload by original name when format is docx
+        if (doc.format or "").lower() == "docx" or (doc.filename or "").lower().endswith(
+            ".docx"
+        ):
+            match = (
+                db.query(UploadedFile)
+                .filter(UploadedFile.original_name == doc.filename)
+                .order_by(UploadedFile.id.desc())
+                .first()
+            )
+            if match and Path(match.stored_path).is_file():
+                return Path(match.stored_path), label or match.original_name
+        raise HTTPException(
+            400,
+            "No .docx file found for this library document — upload the original "
+            ".docx (or use Import theme from an upload).",
+        )
+
+    raise HTTPException(400, "source must be file|document")
 
 
 def _archive_report_to_library(
@@ -462,9 +516,75 @@ def update_report(
         row.body_md = body.body_md
     if body.outline_md is not None:
         row.outline_md = body.outline_md
+    if body.theme is not None:
+        row.theme_json = theme_to_json(body.theme.model_dump())
     db.commit()
     db.refresh(row)
     return _project_out(row)
+
+
+@router.post("/reports/{report_id}/theme/import", response_model=ReportProjectOut)
+def import_report_theme(
+    report_id: int, body: ThemeImportIn, db: Session = Depends(get_db)
+):
+    """Extract fonts/header/footer/logos from a .docx example into this report."""
+    row = db.get(ReportProject, report_id)
+    if not row:
+        raise HTTPException(404, "Report not found")
+    docx_path, label = _resolve_docx_path(db, body.source, body.source_id)
+    settings = get_settings()
+    settings.ensure_dirs()
+    assets_dir = settings.theme_assets_dir(report_id)
+    try:
+        theme = extract_theme_from_docx(
+            docx_path, assets_dir, source_label=label
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Could not read theme from .docx: {exc}") from exc
+    row.theme_json = theme_to_json(theme)
+    db.commit()
+    db.refresh(row)
+    return _project_out(row)
+
+
+@router.delete("/reports/{report_id}/theme", response_model=ReportProjectOut)
+def clear_report_theme(report_id: int, db: Session = Depends(get_db)):
+    row = db.get(ReportProject, report_id)
+    if not row:
+        raise HTTPException(404, "Report not found")
+    row.theme_json = theme_to_json(empty_theme())
+    settings = get_settings()
+    assets_dir = settings.theme_assets_dir(report_id)
+    if assets_dir.exists():
+        shutil.rmtree(assets_dir, ignore_errors=True)
+    db.commit()
+    db.refresh(row)
+    return _project_out(row)
+
+
+@router.get("/reports/{report_id}/theme/assets/{filename}")
+def get_theme_asset(report_id: int, filename: str, db: Session = Depends(get_db)):
+    row = db.get(ReportProject, report_id)
+    if not row:
+        raise HTTPException(404, "Report not found")
+    # Prevent path traversal
+    safe = Path(filename).name
+    if safe != filename or not safe:
+        raise HTTPException(400, "Invalid asset name")
+    path = get_settings().theme_assets_dir(report_id) / safe
+    if not path.is_file():
+        raise HTTPException(404, "Asset not found")
+    media = "application/octet-stream"
+    lower = safe.lower()
+    if lower.endswith(".png"):
+        media = "image/png"
+    elif lower.endswith((".jpg", ".jpeg")):
+        media = "image/jpeg"
+    elif lower.endswith(".gif"):
+        media = "image/gif"
+    elif lower.endswith(".webp"):
+        media = "image/webp"
+    return Response(content=path.read_bytes(), media_type=media)
 
 
 @router.delete("/reports/{report_id}")
@@ -488,7 +608,7 @@ async def generate_report(
     pipe = ReportPipeline(db, row)
     try:
         if body.stage == "style_notes":
-            await pipe.run_style_notes()
+            await pipe.run_style_notes(force=True)
         elif body.stage == "outline":
             await pipe.run_outline()
         elif body.stage == "draft":
@@ -507,6 +627,43 @@ async def generate_report(
         raise HTTPException(502, f"Generation failed: {exc}") from exc
     db.refresh(row)
     return _project_out(row)
+
+
+@router.get("/reports/{report_id}/context-preview")
+def preview_report_context(report_id: int, db: Session = Depends(get_db)):
+    """Dry-run the context pack (no LLM): lengths, fingerprint, cache hit."""
+    row = db.get(ReportProject, report_id)
+    if not row:
+        raise HTTPException(404, "Report not found")
+    from app.services.context import build_context_pack, has_real_examples
+    from app.services.style_cache import fingerprint_examples, load_style_notes
+
+    pack = build_context_pack(
+        db,
+        file_ids_json=row.file_ids_json,
+        query_ids_json=row.query_ids_json,
+        document_ids_json=getattr(row, "document_ids_json", None) or "[]",
+        example_file_ids_json=getattr(row, "example_file_ids_json", None) or "[]",
+        use_all_examples=bool(getattr(row, "use_all_examples", True)),
+        brief=row.brief,
+        title=row.title,
+    )
+    examples = pack["examples"]
+    key = fingerprint_examples(examples) if has_real_examples(examples) else ""
+    settings = get_settings()
+    cached = load_style_notes(settings.style_cache_dir, key) if key else None
+    return {
+        "title": pack["title"],
+        "brief_chars": len(pack["brief"] or ""),
+        "results_chars": len(pack["results_context"] or ""),
+        "examples_chars": len(examples or ""),
+        "has_examples": has_real_examples(examples),
+        "style_notes_key": key,
+        "style_notes_cached": bool(cached),
+        "style_notes_on_project": bool((getattr(row, "style_notes_md", None) or "").strip()),
+        "results_preview": (pack["results_context"] or "")[:1200],
+        "examples_preview": (examples or "")[:1200],
+    }
 
 
 @router.post("/reports/{report_id}/done")
@@ -579,9 +736,16 @@ def export_docx(report_id: int, db: Session = Depends(get_db)):
     row = db.get(ReportProject, report_id)
     if not row:
         raise HTTPException(404, "Report not found")
-    data = markdown_to_docx_bytes(row.title, row.body_md or "")
     settings = get_settings()
     settings.ensure_dirs()
+    theme = parse_theme_json(getattr(row, "theme_json", None) or "{}")
+    assets_dir = settings.theme_assets_dir(report_id)
+    data = markdown_to_docx_bytes(
+        row.title,
+        row.body_md or "",
+        theme=theme,
+        theme_assets_dir=assets_dir if assets_dir.exists() else None,
+    )
     out = settings.reports_dir / f"report_{report_id}.docx"
     out.write_bytes(data)
     filename = f"report_{report_id}.docx"

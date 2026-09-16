@@ -122,6 +122,21 @@ class ReportProjectIn(BaseModel):
     llm_profile_id: Optional[int] = None
 
 
+class ReportTheme(BaseModel):
+    heading_font: Optional[str] = None
+    body_font: Optional[str] = None
+    header_text: str = ""
+    footer_text: str = ""
+    header_logo: Optional[str] = None
+    footer_logo: Optional[str] = None
+    source_label: str = ""
+
+
+class ThemeImportIn(BaseModel):
+    source: str = Field(description="file | document")
+    source_id: int
+
+
 class ReportProjectUpdate(BaseModel):
     title: Optional[str] = None
     brief: Optional[str] = None
@@ -133,6 +148,7 @@ class ReportProjectUpdate(BaseModel):
     llm_profile_id: Optional[int] = None
     body_md: Optional[str] = None
     outline_md: Optional[str] = None
+    theme: Optional[ReportTheme] = None
 
 
 class ReportProjectOut(BaseModel):
@@ -150,6 +166,7 @@ class ReportProjectOut(BaseModel):
     outline_md: str
     body_md: str
     critique_md: str
+    theme: ReportTheme = Field(default_factory=ReportTheme)
     created_at: datetime
     updated_at: datetime
 
