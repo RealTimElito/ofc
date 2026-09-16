@@ -4,6 +4,7 @@ import {
   api,
   LibraryDocument,
   LlmProfile,
+  PipelineRun,
   ReportProject,
   ReportTheme,
   SavedQuery,
@@ -85,6 +86,7 @@ export default function ReportEditorPage() {
   const [profiles, setProfiles] = useState<LlmProfile[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastErrorRun, setLastErrorRun] = useState<PipelineRun | null>(null);
   const [tab, setTab] = useState<"body" | "outline" | "critique" | "style">("body");
   const [bodyView, setBodyView] = useState<BodyView>("split");
   const [previewOpen, setPreviewOpen] = useState(true);
@@ -109,6 +111,20 @@ export default function ReportEditorPage() {
     setDocuments(d);
     setQueries(q);
     setProfiles(p);
+    if (r.status === "error") {
+      await loadLastErrorRun(r.id);
+    } else {
+      setLastErrorRun(null);
+    }
+  }
+
+  async function loadLastErrorRun(id: number) {
+    try {
+      const runs = await api.listReportRuns(id, { limit: 1, errorsOnly: true });
+      setLastErrorRun(runs[0] ?? null);
+    } catch {
+      setLastErrorRun(null);
+    }
   }
 
   useEffect(() => {
@@ -236,6 +252,7 @@ export default function ReportEditorPage() {
     if (!report) return;
     setBusy(true);
     setError(null);
+    setLastErrorRun(null);
     try {
       await save({
         title: report.title,
@@ -251,12 +268,21 @@ export default function ReportEditorPage() {
       });
       const updated = await api.generate(report.id, stage, true);
       setReport(normalizeReport(updated));
+      setLastErrorRun(null);
       if (stage === "outline") setTab("outline");
       else if (stage === "critique") setTab("critique");
       else if (stage === "style_notes") setTab("style");
       else setTab("body");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      try {
+        const refreshed = await api.getReport(report.id);
+        setReport(normalizeReport(refreshed));
+        await loadLastErrorRun(report.id);
+      } catch {
+        /* keep request error message */
+      }
     } finally {
       setBusy(false);
     }
@@ -414,7 +440,37 @@ export default function ReportEditorPage() {
         </div>
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {(error || lastErrorRun || report.status === "error") && (
+        <div className="error-banner" role="alert">
+          <strong>Generation failed</strong>
+          {lastErrorRun ? (
+            <>
+              <div className="error-banner-meta">
+                Stage: <code>{lastErrorRun.stage}</code>
+                {lastErrorRun.created_at
+                  ? ` · ${new Date(lastErrorRun.created_at).toLocaleString()}`
+                  : ""}
+              </div>
+              {lastErrorRun.log_text.trim() ? (
+                <pre className="error-banner-log">{lastErrorRun.log_text.trim()}</pre>
+              ) : error ? (
+                <p className="error-banner-fallback">{error}</p>
+              ) : (
+                <p className="error-banner-fallback">
+                  Pipeline stopped with status <code>error</code>, but no log was recorded.
+                </p>
+              )}
+            </>
+          ) : error ? (
+            <p className="error-banner-fallback">{error}</p>
+          ) : (
+            <p className="error-banner-fallback">
+              This report is in <code>error</code> status. Re-run generate after fixing the LLM
+              endpoint or inputs.
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="editor-layout">
         <div className="editor-controls">

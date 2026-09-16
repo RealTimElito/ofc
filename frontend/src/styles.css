@@ -821,6 +821,35 @@ th {
   margin-bottom: var(--space-4);
 }
 
+.error-banner strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.error-banner-meta {
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+  color: color-mix(in srgb, var(--danger) 75%, var(--ink));
+}
+
+.error-banner-log {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85rem;
+  max-height: 12rem;
+  overflow: auto;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--danger) 6%, white);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+}
+
+.error-banner-fallback {
+  margin: 0.35rem 0 0;
+}
+
 .empty {
   color: var(--ink-soft);
   font-style: italic;

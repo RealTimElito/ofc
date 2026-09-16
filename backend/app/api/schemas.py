@@ -173,6 +173,17 @@ class ReportProjectOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PipelineRunOut(BaseModel):
+    id: int
+    project_id: int
+    stage: str
+    status: str
+    log_text: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class GenerateIn(BaseModel):
     stage: str = Field(
         default="full",

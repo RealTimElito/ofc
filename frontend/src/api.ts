@@ -80,6 +80,15 @@ export type ReportProject = {
   updated_at: string;
 };
 
+export type PipelineRun = {
+  id: number;
+  project_id: number;
+  stage: string;
+  status: string;
+  log_text: string;
+  created_at: string;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
   if (!res.ok) {
@@ -187,6 +196,13 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ stage, with_critique }),
     }),
+  listReportRuns: (id: number, opts?: { limit?: number; errorsOnly?: boolean }) => {
+    const params = new URLSearchParams();
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    if (opts?.errorsOnly) params.set("errors_only", "true");
+    const q = params.toString();
+    return request<PipelineRun[]>(`/api/reports/${id}/runs${q ? `?${q}` : ""}`);
+  },
   markDone: (id: number, role = "example") =>
     request<{ report: ReportProject; document: LibraryDocument }>(`/api/reports/${id}/done`, {
       method: "POST",

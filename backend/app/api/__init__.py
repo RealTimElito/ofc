@@ -23,6 +23,7 @@ from app.api.schemas import (
     LlmProfileIn,
     LlmProfileOut,
     MarkDoneIn,
+    PipelineRunOut,
     QueryPreviewOut,
     ReportProjectIn,
     ReportProjectOut,
@@ -596,6 +597,25 @@ def delete_report(report_id: int, db: Session = Depends(get_db)):
     db.delete(row)
     db.commit()
     return {"ok": True}
+
+
+@router.get("/reports/{report_id}/runs", response_model=list[PipelineRunOut])
+def list_report_runs(
+    report_id: int,
+    limit: int = 20,
+    errors_only: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Recent pipeline runs for a report (newest first), including error log_text."""
+    row = db.get(ReportProject, report_id)
+    if not row:
+        raise HTTPException(404, "Report not found")
+    limit = max(1, min(limit, 100))
+    q = db.query(PipelineRun).filter(PipelineRun.project_id == report_id)
+    if errors_only:
+        q = q.filter(PipelineRun.status == "error")
+    rows = q.order_by(PipelineRun.id.desc()).limit(limit).all()
+    return [PipelineRunOut.model_validate(r) for r in rows]
 
 
 @router.post("/reports/{report_id}/generate", response_model=ReportProjectOut)
