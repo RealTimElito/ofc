@@ -35,7 +35,37 @@ def _is_stub_example(body: str) -> bool:
     lowered = text.lower()
     if lowered.startswith("# smoke") and len(text) < 400:
         return True
+    if lowered.startswith("sample prior report") and len(text) < 400:
+        return True
+    # Theme extracts / fragments without report section headings
+    if len(text) < 220 and "## " not in text and not text.lstrip().startswith("# "):
+        return True
     return False
+
+
+def _split_query_ids_by_purpose(
+    db: Session, query_ids: Iterable[int]
+) -> tuple[list[int], list[int]]:
+    """Split selected queries into (results_ids, example_ids) by saved purpose.
+
+    purpose=examples must never land in results context (those bodies are style
+    references, not facts for the new report). purpose=both contributes to both.
+    """
+    results_ids: list[int] = []
+    example_ids: list[int] = []
+    for qid in query_ids:
+        saved = db.get(SavedQuery, qid)
+        if not saved:
+            continue
+        purpose = (saved.purpose or "results").lower()
+        if purpose == "examples":
+            example_ids.append(qid)
+        elif purpose == "both":
+            results_ids.append(qid)
+            example_ids.append(qid)
+        else:
+            results_ids.append(qid)
+    return results_ids, example_ids
 
 
 def gather_files_as(
@@ -145,14 +175,17 @@ def build_context_pack(
     title: str,
 ) -> dict[str, str]:
     context_file_ids = json.loads(file_ids_json or "[]")
-    results_query_ids = json.loads(query_ids_json or "[]")
+    selected_query_ids = json.loads(query_ids_json or "[]")
+    results_query_ids, selected_example_queries = _split_query_ids_by_purpose(
+        db, selected_query_ids
+    )
 
     if use_all_examples:
         ex_files, ex_docs, ex_queries = all_example_source_ids(db)
     else:
         ex_files = json.loads(example_file_ids_json or "[]")
         ex_docs = json.loads(document_ids_json or "[]")
-        ex_queries = []
+        ex_queries = list(selected_example_queries)
 
     file_ctx = gather_files_as(db, context_file_ids, as_role="context")
     q_ctx = gather_queries_as(db, results_query_ids, as_role="context")
@@ -163,7 +196,11 @@ def build_context_pack(
     file_ex = gather_files_as(db, ex_files, as_role="example")
     doc_ex = gather_documents_as(db, ex_docs, as_role="example")
     q_ex = gather_queries_as(db, ex_queries, as_role="example")
-    examples = "\n\n".join(p for p in (file_ex, doc_ex, q_ex) if p).strip()
+    # Longer / richer examples first so style extraction is not dominated by
+    # short demo library docs when prior reports are also attached.
+    example_blocks = [p for p in (file_ex, doc_ex, q_ex) if p]
+    example_blocks.sort(key=len, reverse=True)
+    examples = "\n\n".join(example_blocks).strip()
 
     return {
         "title": title,

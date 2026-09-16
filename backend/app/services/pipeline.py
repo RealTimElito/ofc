@@ -21,6 +21,7 @@ from app.services.style_cache import (
 STYLE_NOTES_PROMPT = """You analyze example reports to extract reusable *writing style* signals.
 Do not summarize facts or outcomes from the examples. Extract only how they are written.
 Ignore stubs, placeholders, or tiny fragments (e.g. smoke tests) when richer examples exist.
+When examples disagree, prefer section naming and voice from the longer, fuller reports.
 
 ## Example reports
 {examples}
@@ -37,6 +38,7 @@ Formality, tense, and person (e.g. third-person past, impersonal passive).
 
 ### Recurring phrases
 Stock openers, transitions, and closings — quote short phrases to reuse.
+Do not list full factual sentences or outcome claims from the examples.
 
 ### Terminology
 Preferred terms / glossary-like wording (and what to avoid if contrast is clear).
@@ -101,6 +103,9 @@ Language consistency (required when style notes are present):
   phrasing, hedging, and closing patterns listed in the style notes.
 - Reuse recurring phrases from the notes where they fit; do not invent new house style.
 - Do not copy example-only facts, names, or figures.
+- Do not introduce metric names (e.g. throughput) that do not appear in results.
+- Prefer section names from the richest prior-report examples when they fit the brief;
+  do not invent extra sections or duplicate headings.
 
 Be precise. Output only the report."""
 

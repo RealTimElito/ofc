@@ -80,8 +80,20 @@ class LlmClient:
             "Content-Type": "application/json",
         }
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
+            try:
+                response = await client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                detail = (exc.response.text or "").strip()[:400]
+                raise RuntimeError(
+                    f"LLM request failed ({exc.response.status_code}) for model "
+                    f"{self.config.model!r} at {url}"
+                    + (f": {detail}" if detail else "")
+                ) from exc
+            except httpx.RequestError as exc:
+                raise RuntimeError(
+                    f"LLM unreachable at {url} (model {self.config.model!r}): {exc}"
+                ) from exc
             data = response.json()
         try:
             return data["choices"][0]["message"]["content"]
