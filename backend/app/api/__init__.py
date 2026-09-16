@@ -672,11 +672,17 @@ def preview_report_context(report_id: int, db: Session = Depends(get_db)):
     key = fingerprint_examples(examples) if has_real_examples(examples) else ""
     settings = get_settings()
     cached = load_style_notes(settings.style_cache_dir, key) if key else None
+    example_block_count = 0
+    if has_real_examples(examples):
+        example_block_count = sum(
+            1 for line in examples.splitlines() if line.startswith("### ")
+        )
     return {
         "title": pack["title"],
         "brief_chars": len(pack["brief"] or ""),
         "results_chars": len(pack["results_context"] or ""),
         "examples_chars": len(examples or ""),
+        "example_blocks": example_block_count,
         "has_examples": has_real_examples(examples),
         "style_notes_key": key,
         "style_notes_cached": bool(cached),

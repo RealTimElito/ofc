@@ -31,8 +31,9 @@ example packs skip re-extraction.
 
 Continuously fine-tuning / “training” on every stored report is a **poor default under ~1000
 documents**: costly, brittle offline, and needs an eval harness. Prefer attaching the best
-example reports, the style-notes stage, and the cheap style-notes cache. Optional later work:
-local similarity ranking of examples — not model-weight training.
+example reports, the style-notes stage, and the cheap style-notes cache. When “use all
+examples” is on, OFC ranks library examples by cheap lexical similarity to the title/brief
+(and keeps a top budget) — not model-weight training.
 
 ## Quick start
 

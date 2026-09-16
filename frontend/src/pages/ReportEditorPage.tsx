@@ -773,7 +773,8 @@ export default function ReportEditorPage() {
             </div>
             <p className="empty" style={{ marginBottom: 0 }}>
               Full = style notes → outline → draft → critique → revise. Style notes are cached per
-              example set (no model fine-tuning). Needs a reachable local LLM with a pulled model.
+              example set; “use all” ranks examples by brief similarity (no model fine-tuning).
+              Needs a reachable local LLM with a pulled model.
             </p>
           </div>
 
