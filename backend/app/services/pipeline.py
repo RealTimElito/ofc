@@ -20,6 +20,7 @@ from app.services.style_cache import (
 
 STYLE_NOTES_PROMPT = """You analyze example reports to extract reusable *writing style* signals.
 Do not summarize facts or outcomes from the examples. Extract only how they are written.
+Ignore stubs, placeholders, or tiny fragments (e.g. smoke tests) when richer examples exist.
 
 ## Example reports
 {examples}

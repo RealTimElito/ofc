@@ -27,6 +27,17 @@ def _as_context_block(title: str, body: str) -> str:
     return f"### {title}\n\n{body}\n"
 
 
+def _is_stub_example(body: str) -> bool:
+    """True for tiny placeholder examples that dilute style extraction."""
+    text = (body or "").strip()
+    if len(text) < 80:
+        return True
+    lowered = text.lower()
+    if lowered.startswith("# smoke") and len(text) < 400:
+        return True
+    return False
+
+
 def gather_files_as(
     db: Session,
     file_ids: Iterable[int],
@@ -40,6 +51,8 @@ def gather_files_as(
         if not row:
             continue
         text = read_upload_text(Path(row.stored_path))
+        if as_role == "example" and _is_stub_example(text):
+            continue
         parts.append(
             _as_context_block(
                 f"File: {row.original_name} (used as {as_role})",
@@ -59,6 +72,8 @@ def gather_documents_as(
     for did in document_ids:
         row = db.get(Document, did)
         if not row:
+            continue
+        if as_role == "example" and _is_stub_example(row.body_md or ""):
             continue
         meta = f"format={row.format}"
         if row.filename:

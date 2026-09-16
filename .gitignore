@@ -8,9 +8,13 @@ __pycache__/
 data/uploads/*
 data/reports/*
 data/db/*
+data/style_cache/*
+data/themes/*
 !data/uploads/.gitkeep
 !data/reports/.gitkeep
 !data/db/.gitkeep
+!data/style_cache/.gitkeep
+!data/themes/.gitkeep
 !data/samples/
 backend/data/
 frontend/node_modules/
