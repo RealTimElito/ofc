@@ -97,7 +97,9 @@ and results. Outlook / next-steps bullets may only restate notes or constraints
 from results_context or the brief — never from examples. Do not reuse example
 openers, staffing/backlog/"planned bands" themes, or prior-period recommendations.
 If results/brief give no outlook content, omit Outlook or leave it empty.
-Do not write the full report yet."""
+Do not write the full report yet.
+Output only the Markdown outline — no preamble, no closing notes, and no
+commentary about what you omitted or alternative outlines."""
 
 
 DRAFT_PROMPT = """Title: {title}
@@ -478,6 +480,78 @@ def strip_example_bleed(body: str, examples: str, *, allowed: str) -> str:
     return out + ("\n" if (body or "").endswith("\n") else "")
 
 
+_HEADING_LINE = re.compile(r"^(#{1,6})\s+(\S.*)$")
+_NULLISH_BULLET = re.compile(
+    r"^([ \t]*[-*•]\s+)?(none|null|n/?a|n\.a\.?)\s*$",
+    re.IGNORECASE,
+)
+_META_COMMENTARY = re.compile(
+    r"^(note\s*:|here is |here'?s |i('ve| have| will|'ll) |if you('d| would) |"
+    r"however\s*,|as requested|let me |the outline (would|above)|"
+    r"i omitted|i'?ve omitted|alternatively\s*:)",
+    re.IGNORECASE,
+)
+
+
+def _is_meta_commentary(line: str) -> bool:
+    stripped = (line or "").strip()
+    if not stripped or stripped.startswith("#") or stripped.startswith("|"):
+        return False
+    if stripped.startswith(("-", "*", "•")):
+        return False
+    return bool(_META_COMMENTARY.match(stripped))
+
+
+def sanitize_generated_markdown(text: str) -> str:
+    """Drop LLM chat preamble, meta notes, duplicate restarts, and nullish bullets.
+
+    Small local models often wrap outlines/drafts with 'Here is…' / 'Note:…' and
+    re-emit a second outline. That noise then pollutes later pipeline stages.
+    """
+    raw = text or ""
+    if not raw.strip():
+        return raw
+    lines = raw.replace("\r\n", "\n").split("\n")
+
+    start = 0
+    found_heading = False
+    for i, line in enumerate(lines):
+        if _HEADING_LINE.match(line.strip()):
+            start = i
+            found_heading = True
+            break
+    lines = lines[start:]
+    if not found_heading:
+        while lines and (
+            not lines[0].strip() or _is_meta_commentary(lines[0].strip())
+        ):
+            lines = lines[1:]
+
+    first_h1: str | None = None
+    kept: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        heading = _HEADING_LINE.match(stripped)
+        if heading and heading.group(1) == "#":
+            title_key = heading.group(2).strip().lower()
+            if first_h1 is None:
+                first_h1 = title_key
+            elif title_key == first_h1:
+                break
+        if kept and _is_meta_commentary(stripped):
+            break
+        if _NULLISH_BULLET.match(stripped):
+            continue
+        if re.fullmatch(r"[-*•]\s*", stripped):
+            continue
+        kept.append(line)
+
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    if not out:
+        return out
+    return out + ("\n" if raw.endswith("\n") else "")
+
+
 class ReportPipeline:
     def __init__(
         self,
@@ -564,11 +638,13 @@ class ReportPipeline:
         return format_bleed_hints(phrases)
 
     def _scrub_body(self, body: str) -> str:
-        return strip_example_bleed(
-            body,
+        cleaned = sanitize_generated_markdown(body)
+        cleaned = strip_example_bleed(
+            cleaned,
             self.pack.get("examples") or "",
             allowed=self._allowed_fact_text(),
         )
+        return sanitize_generated_markdown(cleaned)
 
     def scrub_current_draft(self) -> tuple[str, list[str]]:
         """Re-apply example-bleed scrub to body_md (and outline) without regenerating."""
