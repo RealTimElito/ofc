@@ -214,6 +214,22 @@ class GenerateIn(BaseModel):
     with_critique: bool = True
 
 
+class CheckIssueOut(BaseModel):
+    severity: str
+    category: str
+    code: str
+    message: str
+
+
+class CheckOut(BaseModel):
+    ok: bool
+    llm_used: bool = False
+    llm_error: Optional[str] = None
+    summary_md: str = ""
+    llm_md: str = ""
+    issues: list[CheckIssueOut] = Field(default_factory=list)
+
+
 class MarkDoneIn(BaseModel):
     role: str = Field(
         default="example",

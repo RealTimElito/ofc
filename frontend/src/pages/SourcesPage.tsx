@@ -182,22 +182,43 @@ export default function SourcesPage() {
         <div>
           <h1>Sources</h1>
           <p>
-            Manage the material reports pick from: <strong>examples</strong> (house style /
-            wording) and <strong>context &amp; results</strong> (facts). Tag roles here; each
-            report&apos;s editor chooses which ones to use.
+            Prepare material reports pick from: <strong>examples</strong> (house style) and{" "}
+            <strong>context &amp; results</strong> (facts). Tag roles here; each report editor
+            chooses which ones to attach.
           </p>
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
+      <div className="sources-guide" aria-label="Suggested order">
+        <div className="sources-guide-step">
+          <strong>1 · Upload or library</strong>
+          <p>Add .docx / Markdown files and tag them example, context, or both.</p>
+        </div>
+        <div className="sources-guide-step">
+          <strong>2 · Database (optional)</strong>
+          <p>Save a connection, then a results query the report can attach.</p>
+        </div>
+        <div className="sources-guide-step">
+          <strong>3 · Open a report</strong>
+          <p>In the editor, attach examples + results, then Full generate or Check.</p>
+        </div>
+      </div>
+
+      <h2 className="sources-section-title">Files &amp; library</h2>
+      <p className="sources-section-lead">
+        Uploads feed the report editor immediately; the library also keeps finished reports and
+        extracted .docx text for examples and theme import.
+      </p>
+
       <div className="panel">
         <h2>Upload files</h2>
         <p className="field-hint">
           Role maps to the report editor: <em>example</em> → Examples,{" "}
           <em>context</em> → Context &amp; results, <em>both</em> → either. Supports text,
-          Markdown, CSV/JSON, and Word <code>.docx</code> (text is extracted). Legacy{" "}
-          <code>.doc</code> is not supported — convert to <code>.docx</code> first.
+          Markdown, CSV/JSON, and Word <code>.docx</code>. Legacy <code>.doc</code> is not
+          supported.
         </p>
         <form className="row" onSubmit={onUpload}>
           <input
@@ -206,7 +227,7 @@ export default function SourcesPage() {
             multiple
             accept=".txt,.md,.markdown,.csv,.tsv,.json,.yaml,.yml,.xml,.html,.htm,.log,.rst,.docx"
           />
-          <select value={role} onChange={(e) => setRole(e.target.value)}>
+          <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="Upload role">
             <option value="context">Context / results</option>
             <option value="example">Example report</option>
             <option value="both">Both</option>
@@ -214,57 +235,57 @@ export default function SourcesPage() {
           <button type="submit">Upload</button>
         </form>
         {files.length === 0 ? (
-          <p className="empty">No files uploaded.</p>
+          <p className="empty">No files uploaded yet — start here if you have local docs.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Role</th>
-                <th>Size</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {files.map((f) => (
-                <tr key={f.id}>
-                  <td>{f.original_name}</td>
-                  <td>
-                    <select
-                      value={f.role}
-                      onChange={(e) =>
-                        void api.updateFileRole(f.id, e.target.value).then(load)
-                      }
-                    >
-                      <option value="context">context</option>
-                      <option value="example">example</option>
-                      <option value="both">both</option>
-                    </select>
-                  </td>
-                  <td>{Math.round(f.size_bytes / 1024)} KB</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="danger"
-                      onClick={() => void api.deleteFile(f.id).then(load)}
-                    >
-                      Delete
-                    </button>
-                  </td>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Role</th>
+                  <th>Size</th>
+                  <th />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {files.map((f) => (
+                  <tr key={f.id}>
+                    <td>{f.original_name}</td>
+                    <td>
+                      <select
+                        value={f.role}
+                        onChange={(e) =>
+                          void api.updateFileRole(f.id, e.target.value).then(load)
+                        }
+                      >
+                        <option value="context">context</option>
+                        <option value="example">example</option>
+                        <option value="both">both</option>
+                      </select>
+                    </td>
+                    <td>{Math.round(f.size_bytes / 1024)} KB</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => void api.deleteFile(f.id).then(load)}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
       <div className="panel">
         <h2>Document library</h2>
         <p className="field-hint">
-          Finished reports (via Mark done) and extracted <code>.docx</code> / Markdown uploads.
-          Same roles as uploads — usually <em>example</em> for the report editor&apos;s Examples
-          picker (library wins over a duplicate upload of the same file). Short smoke/# Smoke
-          stubs are flagged so they can be pruned before they pollute example packs.
+          Finished reports (Mark done) and extracted uploads. Usually tag as <em>example</em>.
+          Short smoke stubs are flagged so you can prune them before they pollute style packs.
         </p>
         {stubDocs.length > 0 && (
           <div className="warn-banner" style={{ marginBottom: "0.75rem" }}>
@@ -315,80 +336,89 @@ export default function SourcesPage() {
         ) : visibleDocs.length === 0 ? (
           <p className="empty">No stub documents match the current filter.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th aria-label="Select" />
-                <th>Title</th>
-                <th>Format</th>
-                <th>Role</th>
-                <th>Source</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {visibleDocs.map((d) => (
-                <tr key={d.id} className={d.is_stub ? "row-stub" : undefined}>
-                  <td>
-                    {d.is_stub ? (
-                      <input
-                        type="checkbox"
-                        checked={selectedDocIds.has(d.id)}
-                        onChange={() => toggleDocSelected(d.id)}
-                        aria-label={`Select stub ${d.title}`}
-                      />
-                    ) : null}
-                  </td>
-                  <td>
-                    <div>{d.title}</div>
-                    {d.filename && (
-                      <code style={{ fontSize: "0.75rem" }}>{d.filename}</code>
-                    )}
-                    {d.is_stub && d.stub_reason && (
-                      <div>
-                        <span className="chip chip-stub" title={d.stub_reason}>
-                          stub · {d.stub_reason}
-                        </span>
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <span className="chip">{d.format}</span>
-                  </td>
-                  <td>
-                    <select
-                      value={d.role}
-                      onChange={(e) =>
-                        void api.updateDocumentRole(d.id, e.target.value).then(load)
-                      }
-                    >
-                      <option value="context">context</option>
-                      <option value="example">example</option>
-                      <option value="both">both</option>
-                    </select>
-                  </td>
-                  <td>
-                    {d.source_report_id ? `report #${d.source_report_id}` : "upload"}
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="danger"
-                      onClick={() => void api.deleteDocument(d.id).then(load)}
-                    >
-                      Delete
-                    </button>
-                  </td>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th aria-label="Select" />
+                  <th>Title</th>
+                  <th>Format</th>
+                  <th>Role</th>
+                  <th>Source</th>
+                  <th />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {visibleDocs.map((d) => (
+                  <tr key={d.id} className={d.is_stub ? "row-stub" : undefined}>
+                    <td>
+                      {d.is_stub ? (
+                        <input
+                          type="checkbox"
+                          checked={selectedDocIds.has(d.id)}
+                          onChange={() => toggleDocSelected(d.id)}
+                          aria-label={`Select stub ${d.title}`}
+                        />
+                      ) : null}
+                    </td>
+                    <td>
+                      <div>{d.title}</div>
+                      {d.filename && (
+                        <code style={{ fontSize: "0.75rem" }}>{d.filename}</code>
+                      )}
+                      {d.is_stub && d.stub_reason && (
+                        <div>
+                          <span className="chip chip-stub" title={d.stub_reason}>
+                            stub · {d.stub_reason}
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span className="chip">{d.format}</span>
+                    </td>
+                    <td>
+                      <select
+                        value={d.role}
+                        onChange={(e) =>
+                          void api.updateDocumentRole(d.id, e.target.value).then(load)
+                        }
+                      >
+                        <option value="context">context</option>
+                        <option value="example">example</option>
+                        <option value="both">both</option>
+                      </select>
+                    </td>
+                    <td>
+                      {d.source_report_id ? `report #${d.source_report_id}` : "upload"}
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => void api.deleteDocument(d.id).then(load)}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
+
+      <h2 className="sources-section-title">Database results</h2>
+      <p className="sources-section-lead">
+        Optional. Connect a local DB, save a SELECT query with purpose <em>results</em>, then
+        attach it on the report editor under Context &amp; results.
+      </p>
 
       <div className="grid-2">
         <div className="panel">
           <h2>Database connection</h2>
+          <p className="field-hint">Credentials stay on this machine (encrypted at rest).</p>
           <form className="stack" onSubmit={onCreateConn}>
             <label>
               Name
@@ -433,37 +463,40 @@ export default function SourcesPage() {
           </form>
 
           {connections.length > 0 && (
-            <table style={{ marginTop: "1rem" }}>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Dialect</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {connections.map((c) => (
-                  <tr key={c.id}>
-                    <td>{c.name}</td>
-                    <td>{c.dialect}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="danger"
-                        onClick={() => void api.deleteConnection(c.id).then(load)}
-                      >
-                        Delete
-                      </button>
-                    </td>
+            <div className="table-wrap">
+              <table style={{ marginTop: "1rem" }}>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Dialect</th>
+                    <th />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {connections.map((c) => (
+                    <tr key={c.id}>
+                      <td>{c.name}</td>
+                      <td>{c.dialect}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() => void api.deleteConnection(c.id).then(load)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
         <div className="panel">
           <h2>Saved query</h2>
+          <p className="field-hint">SELECT only. Purpose <em>results</em> feeds report metrics.</p>
           <form className="stack" onSubmit={onCreateQuery}>
             <label>
               Connection
@@ -531,55 +564,57 @@ export default function SourcesPage() {
       <div className="panel">
         <h2>Queries</h2>
         {queries.length === 0 ? (
-          <p className="empty">No queries saved.</p>
+          <p className="empty">No queries saved yet.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Purpose</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {queries.map((q) => (
-                <tr key={q.id}>
-                  <td>
-                    <div>{q.name}</div>
-                    <code style={{ fontSize: "0.75rem" }}>{q.sql_text.slice(0, 120)}</code>
-                  </td>
-                  <td>
-                    <span className="chip">{q.purpose}</span>
-                  </td>
-                  <td className="row">
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() =>
-                        void api
-                          .previewQuery(q.id)
-                          .then((data) =>
-                            setPreview(JSON.stringify(data, null, 2)),
-                          )
-                          .catch((err) =>
-                            setError(err instanceof Error ? err.message : String(err)),
-                          )
-                      }
-                    >
-                      Preview
-                    </button>
-                    <button
-                      type="button"
-                      className="danger"
-                      onClick={() => void api.deleteQuery(q.id).then(load)}
-                    >
-                      Delete
-                    </button>
-                  </td>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Purpose</th>
+                  <th>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {queries.map((q) => (
+                  <tr key={q.id}>
+                    <td>
+                      <div>{q.name}</div>
+                      <code style={{ fontSize: "0.75rem" }}>{q.sql_text.slice(0, 120)}</code>
+                    </td>
+                    <td>
+                      <span className="chip">{q.purpose}</span>
+                    </td>
+                    <td className="row">
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() =>
+                          void api
+                            .previewQuery(q.id)
+                            .then((data) =>
+                              setPreview(JSON.stringify(data, null, 2)),
+                            )
+                            .catch((err) =>
+                              setError(err instanceof Error ? err.message : String(err)),
+                            )
+                        }
+                      >
+                        Preview
+                      </button>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => void api.deleteQuery(q.id).then(load)}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
         {preview && (
           <pre

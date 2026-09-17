@@ -202,6 +202,40 @@ List concrete issues in these categories:
 Be terse. End with a short "revised priority fixes" list."""
 
 
+CHECK_PROMPT = """You are validating a draft report (facts + style) for an air-gapped org.
+
+## Brief
+{brief}
+
+## Results / data (only factual source besides the brief)
+{results_context}
+
+## Style notes (structure/tone patterns only — never invent facts from these)
+{style_notes}
+
+## Machine pre-checks (already flagged; do not repeat verbatim — deepen or add)
+{deterministic_summary}
+
+## Draft
+{draft}
+{bleed_hints}
+---
+Validate in two tracks:
+
+### Facts
+- Invented claims not supported by results/brief
+- Results-table metrics missing from Key results / Key metrics
+- Outlook / next-step bullets ungrounded in Notes or the brief
+- Orphan None/N/A note lines
+
+### Style
+- Section naming, voice, metric phrasing, hedging, closings vs style notes
+- Do NOT require copying example-only facts or numbers from examples
+
+Be terse. Use short bullets under ### Facts and ### Style. Skip empty sections.
+End with a 2–5 item "Priority fixes" list."""
+
+
 REVISE_PROMPT = """Title: {title}
 
 ## Brief
@@ -985,6 +1019,250 @@ def strip_orphan_result_notes(text: str) -> str:
     return out + ("\n" if raw.endswith("\n") else "")
 
 
+def missing_key_results_metrics(
+    body: str, results_context: str
+) -> list[dict[str, str]]:
+    """Results-table metrics not covered under Key results / Key metrics / Results."""
+    raw = body or ""
+    metrics = extract_result_metrics(results_context)
+    if not raw.strip() or not metrics:
+        return []
+    section_cmp = _norm_overlap_text(_key_results_section_text(raw))
+    return [m for m in metrics if not _metric_covered_in_text(section_cmp, m)]
+
+
+def find_ungrounded_outlook_bullets(
+    text: str, *, brief: str, results_context: str
+) -> list[str]:
+    """Outlook bullet contents not grounded in Notes/brief."""
+    raw = text or ""
+    if not raw.strip():
+        return []
+    allowed_cmp = _norm_allowed_text(
+        _outlook_grounding_text(brief, results_context)
+    )
+    lines = raw.replace("\r\n", "\n").split("\n")
+    ungrounded: list[str] = []
+    i = 0
+    while i < len(lines):
+        title_key = _section_title_key(lines[i])
+        if title_key != "outlook":
+            i += 1
+            continue
+        j = i + 1
+        while j < len(lines) and not _HEADING_LINE.match(lines[j].strip()):
+            j += 1
+        for line in lines[i + 1 : j]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            bullet_m = re.match(r"^([ \t]*[-*•]\s+)(.*)$", line)
+            content = bullet_m.group(2).strip() if bullet_m else stripped
+            if not content or _NULLISH_NOTE.match(content):
+                continue
+            cand = _norm_claim_key(content)
+            if not cand:
+                continue
+            if not (
+                allowed_cmp
+                and _supported_by_allowed(cand, allowed_cmp, min_ratio=0.55)
+            ):
+                ungrounded.append(content)
+        i = j
+    return ungrounded
+
+
+def _has_orphan_result_notes(text: str) -> bool:
+    """True when strip_orphan_result_notes would remove something."""
+    before = (text or "").replace("\r\n", "\n")
+    after = strip_orphan_result_notes(before)
+    return before.strip() != after.strip()
+
+
+def _duplicate_results_section_titles(body: str) -> list[str]:
+    """Heading titles for duplicate Key results / Key metrics / Results blocks."""
+    seen: set[str] = set()
+    dupes: list[str] = []
+    for line in (body or "").replace("\r\n", "\n").split("\n"):
+        title_key = _section_title_key(line)
+        if title_key not in _KEY_RESULTS_SECTIONS:
+            continue
+        if title_key in seen:
+            dupes.append(title_key)
+        else:
+            seen.add(title_key)
+    return dupes
+
+
+def collect_deterministic_check_issues(
+    *,
+    body: str,
+    brief: str,
+    results_context: str,
+    examples: str,
+    style_notes: str,
+    style_notes_stale: bool = False,
+) -> list[dict[str, str]]:
+    """Machine checks that work without an LLM (facts + light structure)."""
+    issues: list[dict[str, str]] = []
+    draft = body or ""
+
+    if not draft.strip():
+        issues.append(
+            {
+                "severity": "error",
+                "category": "structure",
+                "code": "empty_draft",
+                "message": "Draft is empty — generate or write content before checking.",
+            }
+        )
+        return issues
+
+    if not (results_context or "").strip() and not (brief or "").strip():
+        issues.append(
+            {
+                "severity": "warning",
+                "category": "facts",
+                "code": "no_fact_context",
+                "message": (
+                    "No brief and no results context attached — fact checks have "
+                    "little to ground against."
+                ),
+            }
+        )
+    elif not (results_context or "").strip():
+        issues.append(
+            {
+                "severity": "info",
+                "category": "facts",
+                "code": "no_results",
+                "message": (
+                    "No results queries/files attached — metric coverage checks "
+                    "are skipped."
+                ),
+            }
+        )
+
+    missing = missing_key_results_metrics(draft, results_context)
+    for metric in missing:
+        label = _humanize_metric_label(metric.get("name") or "metric")
+        value = metric.get("value") or "?"
+        unit = (metric.get("unit") or "").strip()
+        detail = f"{label}: {value}"
+        if unit and not _NULLISH_NOTE.match(unit):
+            detail = f"{detail} {unit}"
+        issues.append(
+            {
+                "severity": "error",
+                "category": "facts",
+                "code": "missing_metric",
+                "message": (
+                    f"Key results omit results-table metric “{detail}” "
+                    "(covered only outside Key results still counts as missing)."
+                ),
+            }
+        )
+
+    ungrounded = find_ungrounded_outlook_bullets(
+        draft, brief=brief, results_context=results_context
+    )
+    for bullet in ungrounded[:8]:
+        snippet = bullet if len(bullet) <= 120 else f"{bullet[:117]}…"
+        issues.append(
+            {
+                "severity": "error",
+                "category": "facts",
+                "code": "ungrounded_outlook",
+                "message": f"Outlook bullet not grounded in Notes/brief: “{snippet}”",
+            }
+        )
+
+    bleed = example_bleed_phrases(
+        draft,
+        examples or "",
+        allowed="\n".join((brief or "", results_context or "")),
+    )
+    for phrase in bleed[:10]:
+        snippet = phrase if len(phrase) <= 120 else f"{phrase[:117]}…"
+        issues.append(
+            {
+                "severity": "warning",
+                "category": "facts",
+                "code": "example_bleed",
+                "message": (
+                    f"Possible example-bleed phrasing (not in brief/results): "
+                    f"“{snippet}”"
+                ),
+            }
+        )
+
+    if _has_orphan_result_notes(draft):
+        issues.append(
+            {
+                "severity": "warning",
+                "category": "structure",
+                "code": "orphan_notes",
+                "message": (
+                    "Orphan result-note / bare None lines detected — scrub or "
+                    "merge notes onto metric bullets."
+                ),
+            }
+        )
+
+    for title in _duplicate_results_section_titles(draft):
+        issues.append(
+            {
+                "severity": "warning",
+                "category": "structure",
+                "code": "duplicate_results_section",
+                "message": (
+                    f"Duplicate results-style section “{title}” — keep one of "
+                    "Key results / Key metrics / Results."
+                ),
+            }
+        )
+
+    if _HOLLOW_SUMMARY_RE.search(draft):
+        issues.append(
+            {
+                "severity": "info",
+                "category": "style",
+                "code": "hollow_summary",
+                "message": (
+                    "Summary-like fluff detected (e.g. “highlights KPIs”) — prefer "
+                    "concrete findings."
+                ),
+            }
+        )
+
+    if not (style_notes or "").strip():
+        issues.append(
+            {
+                "severity": "info",
+                "category": "style",
+                "code": "no_style_notes",
+                "message": (
+                    "No style notes on this report — style validation is limited. "
+                    "Attach examples and run Style notes."
+                ),
+            }
+        )
+    elif style_notes_stale:
+        issues.append(
+            {
+                "severity": "warning",
+                "category": "style",
+                "code": "style_notes_stale",
+                "message": (
+                    "Style notes look out of date vs current examples — re-run "
+                    "Style notes before relying on style checks."
+                ),
+            }
+        )
+
+    return issues
+
+
 def ensure_key_results_cover_metrics(body: str, results_context: str) -> str:
     """Append results-table metrics missing from Key results (not body-wide)."""
     raw = body or ""
@@ -993,8 +1271,7 @@ def ensure_key_results_cover_metrics(body: str, results_context: str) -> str:
         return raw
     # Coverage must be under Key results / Key metrics / Results — a hit only in
     # Summary or Executive overview still counts as missing.
-    section_cmp = _norm_overlap_text(_key_results_section_text(raw))
-    missing = [m for m in metrics if not _metric_covered_in_text(section_cmp, m)]
+    missing = missing_key_results_metrics(raw, results_context)
     if not missing:
         return raw
 
@@ -1355,6 +1632,104 @@ class ReportPipeline:
             f"removed_candidates={removed}; phrases={phrases[:12]!r}",
         )
         return scrubbed, phrases
+
+    def _style_notes_stale(self) -> bool:
+        notes = (getattr(self.project, "style_notes_md", None) or "").strip()
+        if not notes:
+            return False
+        from app.services.context import has_real_examples
+
+        examples = self.pack.get("examples") or ""
+        if not has_real_examples(examples):
+            return bool(getattr(self.project, "style_notes_key", None) or "")
+        key = fingerprint_examples(examples)
+        project_key = getattr(self.project, "style_notes_key", None) or ""
+        return project_key != key
+
+    def collect_check_issues(self) -> list[dict[str, str]]:
+        """Deterministic validation of the current draft."""
+        return collect_deterministic_check_issues(
+            body=self.project.body_md or "",
+            brief=self.pack.get("brief") or "",
+            results_context=self.pack.get("results_context") or "",
+            examples=self.pack.get("examples") or "",
+            style_notes=getattr(self.project, "style_notes_md", None) or "",
+            style_notes_stale=self._style_notes_stale(),
+        )
+
+    async def run_check(self) -> dict:
+        """Validate draft: deterministic checks always; LLM when reachable."""
+        issues = self.collect_check_issues()
+        llm_used = False
+        llm_error: str | None = None
+        llm_md = ""
+
+        empty = any(i.get("code") == "empty_draft" for i in issues)
+        if not empty:
+            det_lines = [
+                f"- [{i.get('severity', 'info')}/{i.get('category', '?')}] "
+                f"{i.get('message', '')}"
+                for i in issues
+            ] or ["- (none)"]
+            prompt = CHECK_PROMPT.format(
+                brief=self.pack.get("brief") or "",
+                results_context=self.pack.get("results_context") or "",
+                style_notes=self._style_notes_for_prompt(),
+                deterministic_summary="\n".join(det_lines),
+                draft=self.project.body_md or "",
+                bleed_hints=self._bleed_hints_for_draft(self.project.body_md or ""),
+            )
+            try:
+                llm_md = await self._chat(prompt, stage="check", temperature=0.2)
+                llm_used = True
+            except GenerationCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                llm_error = str(exc)
+                self._log_run("check", "partial", f"llm_error={exc}")
+
+        error_n = sum(1 for i in issues if i.get("severity") == "error")
+        warn_n = sum(1 for i in issues if i.get("severity") == "warning")
+        info_n = sum(1 for i in issues if i.get("severity") == "info")
+        ok = error_n == 0 and warn_n == 0
+
+        summary_parts: list[str] = [
+            f"**Deterministic:** {error_n} error(s), {warn_n} warning(s), "
+            f"{info_n} info."
+        ]
+        if llm_used and llm_md.strip():
+            summary_parts.append("**LLM review:** completed.")
+        elif llm_error:
+            summary_parts.append(
+                f"**LLM review:** skipped ({llm_error}). Machine checks still apply."
+            )
+        elif empty:
+            summary_parts.append("**LLM review:** skipped (empty draft).")
+        else:
+            summary_parts.append("**LLM review:** not run.")
+
+        summary_md = "\n\n".join(summary_parts)
+        if llm_md.strip():
+            summary_md = f"{summary_md}\n\n---\n\n{llm_md.strip()}"
+
+        status = "ok" if ok and not llm_error else ("partial" if llm_error else "ok")
+        if error_n:
+            status = "issues"
+        self._log_run(
+            "check",
+            status,
+            f"errors={error_n} warnings={warn_n} llm={llm_used}; "
+            f"{summary_md[:1800]}",
+        )
+
+        return {
+            "ok": ok,
+            "llm_used": llm_used,
+            "llm_error": llm_error,
+            "summary_md": summary_md,
+            "issues": issues,
+            "llm_md": llm_md.strip(),
+        }
 
     def _apply_style_notes(self, notes: str, key: str, *, from_cache: bool) -> str:
         examples = self.pack.get("examples") or ""

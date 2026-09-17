@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
+    CheckOut,
     DbConnectionIn,
     DbConnectionOut,
     DocumentIn,
@@ -940,6 +941,23 @@ def scrub_report_bleed(report_id: int, db: Session = Depends(get_db)):
     pipeline.scrub_current_draft()
     db.refresh(row)
     return _project_out(row)
+
+
+@router.post("/reports/{report_id}/check", response_model=CheckOut)
+async def check_report(report_id: int, db: Session = Depends(get_db)):
+    """Validate the current draft (deterministic always; LLM when available)."""
+    row = db.get(ReportProject, report_id)
+    if not row:
+        raise HTTPException(404, "Report not found")
+    if is_job_active(report_id):
+        raise HTTPException(
+            409, "Generation in progress — cancel or wait before checking"
+        )
+    from app.services.pipeline import ReportPipeline
+
+    pipeline = ReportPipeline(db, row)
+    result = await pipeline.run_check()
+    return CheckOut(**result)
 
 
 @router.get("/reports/{report_id}/context-preview")

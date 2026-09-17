@@ -100,6 +100,22 @@ export type PipelineRun = {
   created_at: string;
 };
 
+export type CheckIssue = {
+  severity: string;
+  category: string;
+  code: string;
+  message: string;
+};
+
+export type CheckResult = {
+  ok: boolean;
+  llm_used: boolean;
+  llm_error?: string | null;
+  summary_md: string;
+  llm_md: string;
+  issues: CheckIssue[];
+};
+
 export type LlmPingResult = {
   ok: boolean;
   status_code: number;
@@ -239,6 +255,8 @@ export const api = {
     ),
   scrubBleed: (id: number) =>
     request<ReportProject>(`/api/reports/${id}/scrub-bleed`, { method: "POST" }),
+  checkReport: (id: number) =>
+    request<CheckResult>(`/api/reports/${id}/check`, { method: "POST" }),
   listReportRuns: (id: number, opts?: { limit?: number; errorsOnly?: boolean }) => {
     const params = new URLSearchParams();
     if (opts?.limit != null) params.set("limit", String(opts.limit));

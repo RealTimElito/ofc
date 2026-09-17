@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { Link, useParams } from "react-router-dom";
 import {
   api,
+  CheckResult,
   LibraryDocument,
   LlmProfile,
   PipelineRun,
@@ -152,13 +153,15 @@ export default function ReportEditorPage() {
   const [llmHealth, setLlmHealth] = useState<LlmHealth>("idle");
   const [llmHealthDetail, setLlmHealthDetail] = useState<string | null>(null);
   const [styleNotesStale, setStyleNotesStale] = useState(false);
-  const [tab, setTab] = useState<"body" | "outline" | "critique" | "style">("body");
+  const [tab, setTab] = useState<"body" | "outline" | "critique" | "style" | "check">("body");
   const [bodyView, setBodyView] = useState<BodyView>("split");
   const [previewOpen, setPreviewOpen] = useState(true);
   const [exampleSearch, setExampleSearch] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [themeSearch, setThemeSearch] = useState("");
   const [themePickerOpen, setThemePickerOpen] = useState(false);
+  const [checkResult, setCheckResult] = useState<CheckResult | null>(null);
+  const [checking, setChecking] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   const themePickerRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
@@ -541,6 +544,35 @@ export default function ReportEditorPage() {
     }
   }
 
+  async function runCheck() {
+    if (!report) return;
+    setChecking(true);
+    setBusy(true);
+    setError(null);
+    try {
+      await save({
+        title: report.title,
+        brief: report.brief,
+        body_md: report.body_md,
+        outline_md: report.outline_md,
+        file_ids: report.file_ids,
+        query_ids: report.query_ids,
+        document_ids: report.document_ids,
+        example_file_ids: report.example_file_ids,
+        use_all_examples: report.use_all_examples,
+        llm_profile_id: report.llm_profile_id,
+      });
+      const result = await api.checkReport(report.id);
+      setCheckResult(result);
+      setTab("check");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setChecking(false);
+      setBusy(false);
+    }
+  }
+
   async function markDone() {
     if (!report) return;
     setBusy(true);
@@ -797,21 +829,21 @@ export default function ReportEditorPage() {
       )}
 
       <div className="editor-layout">
-        <div className="editor-controls">
-          <div className="panel">
-            <h2>Brief</h2>
-            <p className="field-hint">What should this report cover? Which results matter?</p>
+        <aside className="editor-controls" aria-label="Report setup">
+          <div className="panel panel-setup">
+            <h2>1 · Brief</h2>
+            <p className="field-hint">Audience, scope, and the questions this report must answer.</p>
             <textarea
               value={report.brief}
               onChange={(e) => setReport({ ...report, brief: e.target.value })}
               onBlur={() => void save({ brief: report.brief })}
-              placeholder="Audience, scope, and the questions the report must answer…"
+              placeholder="What should this report cover? Which results matter?"
             />
           </div>
 
-          <div className="panel">
-            <h2>LLM profile</h2>
-            <p className="field-hint">Which local endpoint drafts this report.</p>
+          <div className="panel panel-setup">
+            <h2>2 · LLM profile</h2>
+            <p className="field-hint">Local endpoint used for generate and Check.</p>
             <select
               value={report.llm_profile_id ?? ""}
               onChange={(e) => {
@@ -835,80 +867,10 @@ export default function ReportEditorPage() {
           </div>
 
           <div className="panel">
-            <h2>Visual theme</h2>
+            <h2>3 · Examples (style)</h2>
             <p className="field-hint">
-              Import fonts, sizes, margins, header/footer text, and logos from a{" "}
-              <code>.docx</code> example. Live preview mirrors that chrome for drafting;
-              Word/HTML export remain the fidelity target (not a full Word clone).
-            </p>
-            <div className="example-picker" ref={themePickerRef}>
-              <div className="search-select">
-                <input
-                  type="search"
-                  placeholder="Import theme from…"
-                  value={themeSearch}
-                  onChange={(e) => {
-                    setThemeSearch(e.target.value);
-                    setThemePickerOpen(true);
-                  }}
-                  onFocus={() => setThemePickerOpen(true)}
-                />
-                {themePickerOpen && (
-                  <ul className="search-select-menu">
-                    {filteredThemes.length === 0 ? (
-                      <li className="empty-option">
-                        No .docx sources — upload a .docx under Sources (library keeps a copy for theme import)
-                      </li>
-                    ) : (
-                      filteredThemes.map((opt) => (
-                        <li key={opt.key}>
-                          <button type="button" disabled={busy} onClick={() => void importTheme(opt)}>
-                            <span>{opt.label}</span>
-                            <small>{opt.meta}</small>
-                          </button>
-                        </li>
-                      ))
-                    )}
-                  </ul>
-                )}
-              </div>
-            </div>
-            {themeIsSet(theme) ? (
-              <div className="theme-summary">
-                <p className="field-hint" style={{ marginBottom: "0.4rem" }}>
-                  Active: <strong>{theme.source_label || "custom"}</strong>
-                  {theme.heading_font || theme.body_font
-                    ? ` · ${[theme.heading_font, theme.body_font].filter(Boolean).join(" / ")}`
-                    : ""}
-                </p>
-                {(theme.header_text || theme.footer_text) && (
-                  <p className="empty" style={{ paddingTop: 0 }}>
-                    {theme.header_text ? `Header: ${theme.header_text}` : ""}
-                    {theme.header_text && theme.footer_text ? " · " : ""}
-                    {theme.footer_text ? `Footer: ${theme.footer_text}` : ""}
-                  </p>
-                )}
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={busy}
-                  onClick={() => void clearTheme()}
-                >
-                  Clear theme
-                </button>
-              </div>
-            ) : (
-              <p className="empty">No visual theme applied yet.</p>
-            )}
-          </div>
-
-          <div className="panel">
-            <h2>Examples</h2>
-            <p className="field-hint">
-              Style references from <Link to="/sources">Sources</Link> (uploads &amp; library
-              tagged example/both). The pipeline extracts recurring phrases, section naming,
-              voice, terminology, and how metrics/closings are phrased, then prefers those
-              formulations (without copying example-only facts).
+              House style from <Link to="/sources">Sources</Link> — voice and section patterns,
+              not facts to copy.
             </p>
             <label className="toggle-row">
               <input
@@ -996,10 +958,10 @@ export default function ReportEditorPage() {
           </div>
 
           <div className="panel">
-            <h2>Context &amp; results</h2>
+            <h2>4 · Context &amp; results (facts)</h2>
             <p className="field-hint">
-              Facts for this report from <Link to="/sources">Sources</Link> (uploads tagged
-              context/both, and results queries) — not style examples.
+              Attach uploads and queries from <Link to="/sources">Sources</Link> that supply
+              numbers and notes for this draft.
             </p>
 
             <h3 className="subhead">Context files</h3>
@@ -1056,8 +1018,78 @@ export default function ReportEditorPage() {
           </div>
 
           <div className="panel">
-            <h2>Pipeline</h2>
-            <p className="field-hint">Generate stages against your brief, examples, and context.</p>
+            <h2>5 · Visual theme</h2>
+            <p className="field-hint">
+              Optional fonts, margins, and header/footer from a <code>.docx</code>. Preview mirrors
+              chrome; Word/HTML export are the fidelity target.
+            </p>
+            <div className="example-picker" ref={themePickerRef}>
+              <div className="search-select">
+                <input
+                  type="search"
+                  placeholder="Import theme from…"
+                  value={themeSearch}
+                  onChange={(e) => {
+                    setThemeSearch(e.target.value);
+                    setThemePickerOpen(true);
+                  }}
+                  onFocus={() => setThemePickerOpen(true)}
+                />
+                {themePickerOpen && (
+                  <ul className="search-select-menu">
+                    {filteredThemes.length === 0 ? (
+                      <li className="empty-option">
+                        No .docx sources — upload a .docx under Sources
+                      </li>
+                    ) : (
+                      filteredThemes.map((opt) => (
+                        <li key={opt.key}>
+                          <button type="button" disabled={busy} onClick={() => void importTheme(opt)}>
+                            <span>{opt.label}</span>
+                            <small>{opt.meta}</small>
+                          </button>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                )}
+              </div>
+            </div>
+            {themeIsSet(theme) ? (
+              <div className="theme-summary">
+                <p className="field-hint" style={{ marginBottom: "0.4rem" }}>
+                  Active: <strong>{theme.source_label || "custom"}</strong>
+                  {theme.heading_font || theme.body_font
+                    ? ` · ${[theme.heading_font, theme.body_font].filter(Boolean).join(" / ")}`
+                    : ""}
+                </p>
+                {(theme.header_text || theme.footer_text) && (
+                  <p className="empty" style={{ paddingTop: 0 }}>
+                    {theme.header_text ? `Header: ${theme.header_text}` : ""}
+                    {theme.header_text && theme.footer_text ? " · " : ""}
+                    {theme.footer_text ? `Footer: ${theme.footer_text}` : ""}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => void clearTheme()}
+                >
+                  Clear theme
+                </button>
+              </div>
+            ) : (
+              <p className="empty">No visual theme applied yet.</p>
+            )}
+          </div>
+
+          <div className="panel panel-actions">
+            <h2>6 · Generate &amp; check</h2>
+            <p className="field-hint">
+              Next: <strong>Full generate</strong> for a new draft, or <strong>Check</strong> to
+              validate the current draft against facts and style.
+            </p>
             {generating && (
               <p className="pipeline-progress-banner" role="status" aria-live="polite">
                 {cancelRequested
@@ -1069,7 +1101,7 @@ export default function ReportEditorPage() {
                     : " · starting…")}
               </p>
             )}
-            <div className="row">
+            <div className="row action-primary">
               <button
                 type="button"
                 disabled={busy}
@@ -1082,6 +1114,14 @@ export default function ReportEditorPage() {
               >
                 Full generate
               </button>
+              <button
+                type="button"
+                disabled={busy || generating || checking}
+                title="Validate facts and style on the current draft (works without LLM for machine checks)"
+                onClick={() => void runCheck()}
+              >
+                {checking ? "Checking…" : "Check"}
+              </button>
               {generating ? (
                 <button
                   type="button"
@@ -1093,6 +1133,9 @@ export default function ReportEditorPage() {
                   {cancelRequested ? "Cancelling…" : "Cancel"}
                 </button>
               ) : null}
+            </div>
+            <p className="subhead stage-label">Single stages</p>
+            <div className="row action-secondary">
               <button
                 type="button"
                 className="secondary"
@@ -1140,26 +1183,25 @@ export default function ReportEditorPage() {
                 title="Remove example-only phrasing from the current draft without regenerating"
                 onClick={() => void scrubExamplePhrasing()}
               >
-                Scrub example phrasing
+                Scrub bleed
               </button>
             </div>
-            <p className="empty" style={{ marginBottom: 0 }}>
-              Full = style notes → outline → draft → critique → revise. Style notes are cached per
-              example set; “use all” ranks examples by brief similarity (no model fine-tuning).
-              Needs a reachable local LLM with a pulled model. Scrub example phrasing reuses the
-              same bleed filters as generate (no LLM call).
+            <p className="empty pipeline-help">
+              Full = style notes → outline → draft → critique → revise. Check always runs machine
+              checks (metrics, Outlook grounding, bleed hints); LLM deepens the review when
+              reachable.
             </p>
           </div>
 
           <div className="panel mark-done-help">
             <h2>Finish</h2>
             <p className="field-hint">
-              <strong>Mark done</strong> sets status to <code>done</code> and copies the draft into
-              the document library as an example other reports can reuse. Legacy Word{" "}
-              <code>.doc</code> is not supported — export <code>.docx</code> instead.
+              <strong>Mark done</strong> (top right) archives the draft into the library as an
+              example. Export Markdown / HTML / Word when ready. Legacy <code>.doc</code> is not
+              supported.
             </p>
           </div>
-        </div>
+        </aside>
 
         <div className="panel draft-panel">
           <div className="draft-toolbar">
@@ -1191,6 +1233,16 @@ export default function ReportEditorPage() {
                 onClick={() => setTab("critique")}
               >
                 Critique
+              </button>
+              <button
+                type="button"
+                className={tab === "check" ? "" : "secondary"}
+                onClick={() => setTab("check")}
+              >
+                Check
+                {checkResult && !checkResult.ok ? (
+                  <span className="tab-badge">!</span>
+                ) : null}
               </button>
             </div>
             {tab === "body" && (
@@ -1235,6 +1287,26 @@ export default function ReportEditorPage() {
             )}
           </div>
 
+          {checkResult && tab !== "check" && (
+            <div
+              className={`check-summary-bar ${checkResult.ok ? "is-ok" : "is-issues"}`}
+              role="status"
+            >
+              <div>
+                <strong>{checkResult.ok ? "Last check passed" : "Last check found issues"}</strong>
+                <span>
+                  {" "}
+                  · {checkResult.issues.filter((i) => i.severity === "error").length} errors,{" "}
+                  {checkResult.issues.filter((i) => i.severity === "warning").length} warnings
+                  {checkResult.llm_used ? " · LLM reviewed" : " · machine only"}
+                </span>
+              </div>
+              <button type="button" className="secondary" onClick={() => setTab("check")}>
+                View Check
+              </button>
+            </div>
+          )}
+
           {tab === "body" && showEditor && (
             <div className="md-format-bar" role="toolbar" aria-label="Markdown formatting">
               {FORMAT_ACTIONS.map((item) => (
@@ -1270,7 +1342,7 @@ export default function ReportEditorPage() {
                     <label className="pane-label" htmlFor="draft-body">
                       Editable Markdown
                     </label>
-                    <span className="pane-hint">Drag the corner to resize width &amp; height</span>
+                    <span className="pane-hint">Drag the corner to resize</span>
                   </div>
                   <div
                     className="editor-panel resizable-pane"
@@ -1293,7 +1365,7 @@ export default function ReportEditorPage() {
                 <div className="preview-shell">
                   <div className="pane-label-row">
                     <span className="pane-label">Live preview</span>
-                    <span className="pane-hint">Drag the corner to resize width &amp; height</span>
+                    <span className="pane-hint">Drag the corner to resize</span>
                   </div>
                   <div
                     className="preview-panel resizable-pane"
@@ -1342,7 +1414,7 @@ export default function ReportEditorPage() {
             <>
               <p className="field-hint">Structure from the outline stage — editable.</p>
               <textarea
-                className="report-body"
+                className="report-body draft-tab-body"
                 value={report.outline_md}
                 onChange={(e) => setReport({ ...report, outline_md: e.target.value })}
                 onBlur={() => void save({ outline_md: report.outline_md })}
@@ -1353,9 +1425,8 @@ export default function ReportEditorPage() {
           {tab === "style" && (
             <>
               <p className="field-hint">
-                Formulation signals extracted from examples (cached per example set). Changing
-                library examples clears the cache; re-run Style notes after the example set
-                changes.
+                Formulation signals from examples (cached per example set). Re-run Style notes
+                after the example set changes.
               </p>
               {styleNotesStale && (
                 <p className="field-hint" style={{ color: "var(--warn)" }}>
@@ -1363,23 +1434,95 @@ export default function ReportEditorPage() {
                 </p>
               )}
               <textarea
-                className="report-body"
+                className="report-body draft-tab-body"
                 value={report.style_notes_md || ""}
                 readOnly
-                placeholder="No style notes yet — attach examples and run Style notes (needs a local LLM model)."
+                placeholder="No style notes yet — attach examples and run Style notes."
               />
             </>
           )}
           {tab === "critique" && (
             <>
-              <p className="field-hint">Model critique — read-only reference.</p>
+              <p className="field-hint">Model critique from the Critique stage — read-only.</p>
               <textarea
-                className="report-body"
+                className="report-body draft-tab-body"
                 value={report.critique_md}
                 readOnly
                 placeholder="Critique stage output"
               />
             </>
+          )}
+          {tab === "check" && (
+            <div className="check-panel">
+              <div className="check-panel-head">
+                <div>
+                  <h3 className="check-panel-title">Validation results</h3>
+                  <p className="field-hint" style={{ marginBottom: 0 }}>
+                    Facts vs attached results/brief; style vs style notes. Machine checks always
+                    run; LLM adds a deeper pass when available.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy || generating || checking}
+                  onClick={() => void runCheck()}
+                >
+                  {checking ? "Checking…" : "Re-run Check"}
+                </button>
+              </div>
+              {!checkResult ? (
+                <p className="empty">
+                  No check yet. Click <strong>Check</strong> in Generate &amp; check (or above) to
+                  validate the current draft.
+                </p>
+              ) : (
+                <>
+                  <div
+                    className={`check-verdict ${checkResult.ok ? "is-ok" : "is-issues"}`}
+                    role="status"
+                  >
+                    <strong>
+                      {checkResult.ok
+                        ? "No errors or warnings from machine checks"
+                        : "Issues found"}
+                    </strong>
+                    <span>
+                      {checkResult.llm_used
+                        ? " · LLM review included"
+                        : checkResult.llm_error
+                          ? ` · LLM skipped: ${checkResult.llm_error}`
+                          : " · machine checks only"}
+                    </span>
+                  </div>
+                  {checkResult.issues.length > 0 ? (
+                    <ul className="check-issue-list">
+                      {checkResult.issues.map((issue, idx) => (
+                        <li
+                          key={`${issue.code}-${idx}`}
+                          className={`check-issue severity-${issue.severity}`}
+                        >
+                          <span className="check-issue-meta">
+                            <span className={`sev-pill sev-${issue.severity}`}>
+                              {issue.severity}
+                            </span>
+                            <span className="check-cat">{issue.category}</span>
+                          </span>
+                          <span className="check-issue-msg">{issue.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="empty">Machine checks found nothing to flag.</p>
+                  )}
+                  {checkResult.llm_md.trim() ? (
+                    <div className="check-llm-block">
+                      <h4 className="subhead">LLM review</h4>
+                      <pre className="check-llm-md">{checkResult.llm_md.trim()}</pre>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
           )}
         </div>
       </div>
