@@ -796,7 +796,7 @@ export default function ReportEditorPage() {
             <h2>Visual theme</h2>
             <p className="field-hint">
               Import fonts, header/footer text, and logos from a <code>.docx</code> example for
-              Word export (preview shows simplified chrome). Not a full Word clone.
+              Word and HTML export (preview shows simplified chrome). Not a full Word clone.
             </p>
             <div className="example-picker" ref={themePickerRef}>
               <div className="search-select">

@@ -47,8 +47,8 @@ export default function AboutPage() {
           <li>
             Edit the draft with the Markdown formatting bar and live preview, then export
             Markdown, HTML, or Word (<code>.docx</code>). Optionally import a visual theme
-            (fonts, header/footer, logos) from a <code>.docx</code> example for Word export;
-            preview chrome is simplified and browser fonts may not match Word exactly.
+            (fonts, header/footer, logos) from a <code>.docx</code> example for Word and HTML
+            export; live preview chrome is simplified and browser fonts may not match Word.
           </li>
           <li>
             <strong>Mark done</strong> archives the report into the document library so later jobs

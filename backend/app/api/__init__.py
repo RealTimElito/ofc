@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import html
 import json
 import shutil
 import uuid
 from pathlib import Path
 
-import markdown as md
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from sqlalchemy.orm import Session
@@ -51,7 +49,8 @@ from app.models import (
 from app.services.crypto import encrypt_secret
 from app.services.db_connector import run_query
 from app.services.docs import read_upload_text
-from app.services.export_docx import markdown_to_docx_bytes, strip_redundant_title_heading
+from app.services.export_docx import markdown_to_docx_bytes
+from app.services.export_html import render_html_export
 from app.services.generate_jobs import (
     ACTIVE_STATUSES,
     is_job_active,
@@ -1032,23 +1031,15 @@ def export_html(report_id: int, db: Session = Depends(get_db)):
     row = db.get(ReportProject, report_id)
     if not row:
         raise HTTPException(404, "Report not found")
-    title = row.title or "Report"
-    body_md = strip_redundant_title_heading(title, row.body_md or "")
-    body = md.markdown(body_md, extensions=["tables", "fenced_code"])
-    safe_title = html.escape(title)
-    html_doc = f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"/>
-<title>{safe_title}</title>
-<style>
-body{{font-family:Georgia,serif;max-width:720px;margin:2rem auto;padding:0 1rem;line-height:1.55;color:#1a1a1a}}
-h1,h2,h3{{font-family:system-ui,sans-serif}}
-table{{border-collapse:collapse;width:100%}} th,td{{border:1px solid #ccc;padding:.4rem .6rem}}
-code{{background:#f4f4f4;padding:.1rem .3rem}} pre{{background:#f4f4f4;padding:1rem;overflow:auto}}
-</style></head><body>
-<h1>{safe_title}</h1>
-{body}
-</body></html>"""
     settings = get_settings()
+    theme = parse_theme_json(getattr(row, "theme_json", None) or "{}")
+    assets_dir = settings.theme_assets_dir(report_id)
+    html_doc = render_html_export(
+        row.title or "Report",
+        row.body_md or "",
+        theme=theme,
+        theme_assets_dir=assets_dir,
+    )
     out = settings.reports_dir / f"report_{report_id}.html"
     out.write_text(html_doc, encoding="utf-8")
     return HTMLResponse(
