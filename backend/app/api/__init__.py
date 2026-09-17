@@ -50,8 +50,10 @@ from app.services.db_connector import run_query
 from app.services.docs import read_upload_text
 from app.services.export_docx import markdown_to_docx_bytes
 from app.services.generate_jobs import (
+    ACTIVE_STATUSES,
     is_job_active,
     job_snapshot,
+    reconcile_report_job,
     request_cancel,
     start_generate,
 )
@@ -791,9 +793,15 @@ async def generate_report(
         raise HTTPException(400, "Unknown stage")
     if is_job_active(report_id):
         raise HTTPException(409, "Generation already in progress for this report")
+    # Clear any ghost in-progress status left by a prior crash/restart.
+    reconcile_report_job(db, report_id)
+    db.refresh(row)
+    prior_status = row.status or "draft"
     row.status = "queued"
     db.commit()
     if not start_generate(report_id, stage, with_critique=body.with_critique):
+        row.status = prior_status if prior_status not in ACTIVE_STATUSES else "draft"
+        db.commit()
         raise HTTPException(409, "Generation already in progress for this report")
     db.refresh(row)
     return _project_out(row)
@@ -805,10 +813,11 @@ def generate_status(report_id: int, db: Session = Depends(get_db)):
     row = db.get(ReportProject, report_id)
     if not row:
         raise HTTPException(404, "Report not found")
-    snap = job_snapshot(report_id)
+    snap = job_snapshot(report_id, db=db)
+    db.refresh(row)
     return {
         "report_id": report_id,
-        "status": row.status,
+        "status": snap["status"] if snap["status"] is not None else row.status,
         "active": snap["active"],
         "cancel_requested": snap["cancel_requested"],
     }
@@ -820,14 +829,25 @@ def cancel_generate(report_id: int, db: Session = Depends(get_db)):
     row = db.get(ReportProject, report_id)
     if not row:
         raise HTTPException(404, "Report not found")
-    if not request_cancel(report_id):
-        raise HTTPException(409, "No generation in progress for this report")
-    return {
-        "ok": True,
-        "report_id": report_id,
-        "status": row.status,
-        "cancel_requested": True,
-    }
+    if request_cancel(report_id):
+        db.refresh(row)
+        return {
+            "ok": True,
+            "report_id": report_id,
+            "status": row.status,
+            "cancel_requested": True,
+        }
+    # No live task: clear orphaned in-progress status so the UI can recover.
+    if row.status in ACTIVE_STATUSES:
+        row.status = "cancelled"
+        db.commit()
+        return {
+            "ok": True,
+            "report_id": report_id,
+            "status": row.status,
+            "cancel_requested": False,
+        }
+    raise HTTPException(409, "No generation in progress for this report")
 
 
 @router.post("/reports/{report_id}/scrub-bleed", response_model=ReportProjectOut)

@@ -19,6 +19,10 @@ async def lifespan(_app: FastAPI):
     settings = get_settings()
     settings.ensure_dirs()
     init_db()
+    # In-process generate tasks die with the process; clear leftover mid-stage rows.
+    from app.services.generate_jobs import sweep_stale_jobs_on_startup
+
+    sweep_stale_jobs_on_startup()
     yield
 
 
