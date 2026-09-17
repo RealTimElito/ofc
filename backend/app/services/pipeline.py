@@ -205,8 +205,17 @@ NO_STYLE_NOTES = (
 )
 
 _SPAN_SPLIT = re.compile(r"(?<=[.!;?])\s+|\n+")
-_OMIT_CLAIM = "[example-specific claim omitted]"
 _TRAIL_PUNCT = re.compile(r"[\s.!;:,\"']+$")
+# Residual wrappers left after silently scrubbing example claims from style notes.
+_EMPTY_EG = re.compile(
+    r"\(?\s*(?:e\.g\.|eg\.?|for example|such as)\s*[:.]?\s*[\"']?\s*[\"']?\s*\)?",
+    re.IGNORECASE,
+)
+_EMPTY_QUOTES = re.compile(r"[\"']\s*[\"']")
+_DANGLING_PUNCT = re.compile(r"\s*([,;:])\s*([.!;:]|$)")
+_MULTI_SPACE = re.compile(r"[ \t]{2,}")
+_OPTIONAL_EMPTY_SECTIONS = frozenset({"outlook", "summary"})
+_HEADING_LINE = re.compile(r"^(#{1,6})\s+(\S.*)$")
 
 
 def _norm_overlap_text(text: str) -> str:
@@ -402,8 +411,42 @@ def format_bleed_hints(phrases: list[str]) -> str:
     )
 
 
+def _scrub_style_note_line(line: str) -> str:
+    """Tidy a style-note line after silent claim removal; '' means drop the line."""
+    if not line.strip():
+        return line.rstrip()
+    if line.lstrip().startswith("#"):
+        return line.rstrip()
+    bullet_m = re.match(r"^([ \t]*[-*•]\s+)", line)
+    prefix = bullet_m.group(1) if bullet_m else ""
+    body = line[len(prefix) :] if bullet_m else line
+    body = _EMPTY_EG.sub("", body)
+    body = _EMPTY_QUOTES.sub("", body)
+    body = _DANGLING_PUNCT.sub(r"\2", body)
+    body = _MULTI_SPACE.sub(" ", body)
+    body = body.strip(" \t")
+    # Drop orphan open/close wrappers left around a removed quote.
+    body = re.sub(r"\(\s*\)", "", body)
+    body = re.sub(r"\[\s*\]", "", body)
+    body = body.strip(" \t-–—:;,.")
+    core = body.strip(" \"'")
+    if len(core) < 8:
+        return ""
+    # Bare pattern stubs like 'past (e.g.)' or dangling open paren.
+    if core.endswith(("(e.g.", "(eg", "(for example")) or core.count("(") > core.count(")"):
+        core = re.sub(r"\s*\([^)]*$", "", core).strip(" \"'")
+        if len(core) < 8:
+            return ""
+        body = core
+    return f"{prefix}{body}".rstrip()
+
+
 def sanitize_style_notes(notes: str, examples: str) -> str:
-    """Strip transplanted example claims from style notes text."""
+    """Strip transplanted example claims from style notes without omit placeholders.
+
+    Uses full claim spans only (no short soft n-grams) so reusable formulation
+    patterns like 'Focus next quarter on [ACTION]' survive.
+    """
     text = notes or ""
     if not text.strip() or not has_real_examples(examples):
         return text
@@ -411,24 +454,51 @@ def sanitize_style_notes(notes: str, examples: str) -> str:
         key = _norm_claim_key(raw)
         if len(key) < 20:
             continue
-        # Replace case-insensitively even when trailing punctuation differs.
+        # Silent removal — placeholders like [example-specific claim omitted]
+        # confuse later draft prompts more than a slightly shorter note.
         pattern = re.compile(re.escape(key), re.IGNORECASE)
-        text = pattern.sub(_OMIT_CLAIM, text)
+        text = pattern.sub("", text)
         pattern_raw = re.compile(re.escape(raw), re.IGNORECASE)
-        text = pattern_raw.sub(_OMIT_CLAIM, text)
-        for soft in _soft_subphrase_keys(key, min_words=3, min_len=18):
-            if soft == key:
-                continue
-            text = re.compile(re.escape(soft), re.IGNORECASE).sub(_OMIT_CLAIM, text)
+        text = pattern_raw.sub("", text)
     cleaned: list[str] = []
     for line in text.splitlines():
-        stripped = line.strip()
-        core = stripped.lstrip("-* ").strip(" \"'")
-        if _OMIT_CLAIM in core and len(re.sub(re.escape(_OMIT_CLAIM), "", core).strip(" .;,\"'")) < 8:
+        scrubbed = _scrub_style_note_line(line)
+        if scrubbed == "" and line.strip():
             continue
-        cleaned.append(line)
-    out = "\n".join(cleaned).strip()
+        cleaned.append(scrubbed)
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned)).strip()
     return out + ("\n" if (notes or "").endswith("\n") else "")
+
+
+def drop_empty_optional_sections(text: str) -> str:
+    """Remove Outlook/Summary headings that have no bullets or body before the next heading."""
+    raw = text or ""
+    if not raw.strip():
+        return raw
+    lines = raw.replace("\r\n", "\n").split("\n")
+    kept: list[str] = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        heading = _HEADING_LINE.match(stripped)
+        if heading:
+            title = heading.group(2).strip().lower()
+            # Strip trailing punctuation / numbering: "Outlook", "Summary:"
+            title_key = re.sub(r"[:.\d\s]+$", "", title).strip()
+            if title_key in _OPTIONAL_EMPTY_SECTIONS:
+                j = i + 1
+                while j < len(lines) and not lines[j].strip():
+                    j += 1
+                # Empty if next non-blank is another heading or EOF.
+                if j >= len(lines) or _HEADING_LINE.match(lines[j].strip()):
+                    i = j
+                    continue
+        kept.append(lines[i])
+        i += 1
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    if not out:
+        return out
+    return out + ("\n" if raw.endswith("\n") else "")
 
 
 def _line_without_bleed(line: str, phrase_keys: list[str]) -> str:
@@ -480,7 +550,6 @@ def strip_example_bleed(body: str, examples: str, *, allowed: str) -> str:
     return out + ("\n" if (body or "").endswith("\n") else "")
 
 
-_HEADING_LINE = re.compile(r"^(#{1,6})\s+(\S.*)$")
 _NULLISH_BULLET = re.compile(
     r"^([ \t]*[-*•]\s+)?(none|null|n/?a|n\.a\.?)\s*$",
     re.IGNORECASE,
@@ -549,7 +618,8 @@ def sanitize_generated_markdown(text: str) -> str:
     out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
     if not out:
         return out
-    return out + ("\n" if raw.endswith("\n") else "")
+    out = out + ("\n" if raw.endswith("\n") else "")
+    return drop_empty_optional_sections(out)
 
 
 class ReportPipeline:
