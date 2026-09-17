@@ -501,19 +501,11 @@ def drop_empty_optional_sections(text: str) -> str:
     return out + ("\n" if raw.endswith("\n") else "")
 
 
-def _line_without_bleed(line: str, phrase_keys: list[str]) -> str:
-    """Drop sentences/bullets that contain a bleed phrase; keep headings."""
-    stripped = line.strip()
-    if not stripped:
-        return line.rstrip()
-    if stripped.startswith("#"):
-        return line.rstrip()
-    bullet = ""
-    match = re.match(r"^([ \t]*[-*•]\s+)", line)
-    content = line
-    if match:
-        bullet = match.group(1)
-        content = line[match.end() :]
+_TABLE_SEP_CELL = re.compile(r"^:?-{3,}:?$")
+
+
+def _scrub_prose_fragment(content: str, phrase_keys: list[str]) -> str:
+    """Drop sentences that contain a bleed phrase; return '' if nothing remains."""
     kept: list[str] = []
     for part in _SPAN_SPLIT.split(content):
         piece = " ".join(part.split()).strip()
@@ -523,9 +515,66 @@ def _line_without_bleed(line: str, phrase_keys: list[str]) -> str:
         if any(pk in piece_cmp for pk in phrase_keys):
             continue
         kept.append(piece)
+    return " ".join(kept).strip()
+
+
+def _is_markdown_table_row(line: str) -> bool:
+    stripped = (line or "").strip()
+    return stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    if not _is_markdown_table_row(line):
+        return False
+    cells = [c.strip() for c in line.strip().strip("|").split("|")]
+    return bool(cells) and all(not c or _TABLE_SEP_CELL.match(c) for c in cells)
+
+
+def _line_without_bleed(line: str, phrase_keys: list[str]) -> str:
+    """Drop sentences/bullets that contain a bleed phrase; keep headings.
+
+    Markdown table *data* rows are scrubbed per cell so a contaminated Notes
+    cell does not delete the whole metric row (value/unit still grounded).
+    """
+    stripped = line.strip()
+    if not stripped:
+        return line.rstrip()
+    if stripped.startswith("#"):
+        return line.rstrip()
+    if _is_markdown_table_separator(line):
+        return line.rstrip()
+    if _is_markdown_table_row(line):
+        leading = re.match(r"^(\s*)", line).group(1)
+        parts = stripped.split("|")
+        # "| a | b |" → ['', ' a ', ' b ', '']
+        cells = parts[1:-1]
+        new_cells: list[str] = []
+        kept_any = False
+        for cell in cells:
+            content = cell.strip()
+            if not content:
+                new_cells.append(cell)
+                continue
+            scrubbed = _scrub_prose_fragment(content, phrase_keys)
+            if scrubbed:
+                kept_any = True
+                new_cells.append(f" {scrubbed} ")
+            else:
+                # Preserve column alignment with an empty cell.
+                new_cells.append("  ")
+        if not kept_any:
+            return ""
+        return f"{leading}|{'|'.join(new_cells)}|"
+    bullet = ""
+    match = re.match(r"^([ \t]*[-*•]\s+)", line)
+    content = line
+    if match:
+        bullet = match.group(1)
+        content = line[match.end() :]
+    kept = _scrub_prose_fragment(content, phrase_keys)
     if not kept:
         return ""
-    return f"{bullet}{' '.join(kept)}".rstrip()
+    return f"{bullet}{kept}".rstrip()
 
 
 def strip_example_bleed(body: str, examples: str, *, allowed: str) -> str:
