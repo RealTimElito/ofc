@@ -816,7 +816,7 @@ def generate_status(report_id: int, db: Session = Depends(get_db)):
 
 @router.post("/reports/{report_id}/cancel")
 def cancel_generate(report_id: int, db: Session = Depends(get_db)):
-    """Request cancel between pipeline stages (in-flight LLM call still finishes)."""
+    """Request cancel; aborts in-flight LLM HTTP and stops between stages."""
     row = db.get(ReportProject, report_id)
     if not row:
         raise HTTPException(404, "Report not found")

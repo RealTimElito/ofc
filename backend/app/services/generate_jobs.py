@@ -53,7 +53,7 @@ def is_job_active(report_id: int) -> bool:
 
 
 def request_cancel(report_id: int) -> bool:
-    """Ask a running job to stop between stages. Returns False if none active."""
+    """Ask a running job to stop ASAP (aborts in-flight LLM HTTP). Returns False if none active."""
     if not is_job_active(report_id):
         return False
     _cancel_flags.add(report_id)

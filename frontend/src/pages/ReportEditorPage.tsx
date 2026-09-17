@@ -654,7 +654,7 @@ export default function ReportEditorPage() {
             {generating ? (
               <span className="pipeline-progress" role="status" aria-live="polite">
                 {cancelRequested
-                  ? " · cancelling after current stage…"
+                  ? " · cancelling…"
                   : stageProgressLabel(pipelineStatus ?? report.status)}
                 {!cancelRequested && latestFinishedRun
                   ? ` · finished ${runStageLabel(latestFinishedRun.stage)}`
@@ -1018,7 +1018,7 @@ export default function ReportEditorPage() {
             {generating && (
               <p className="pipeline-progress-banner" role="status" aria-live="polite">
                 {cancelRequested
-                  ? "Cancel requested — will stop after the current LLM stage finishes."
+                  ? "Cancel requested — stopping the in-flight LLM call…"
                   : stageProgressLabel(pipelineStatus ?? report.status)}
                 {!cancelRequested &&
                   (latestFinishedRun
@@ -1045,7 +1045,7 @@ export default function ReportEditorPage() {
                   className="secondary"
                   disabled={cancelRequested}
                   onClick={() => void cancelGenerate()}
-                  title="Stops between pipeline stages; the current LLM call still finishes"
+                  title="Stops generation ASAP, including an in-flight LLM request"
                 >
                   {cancelRequested ? "Cancelling…" : "Cancel"}
                 </button>

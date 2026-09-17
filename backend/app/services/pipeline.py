@@ -12,7 +12,12 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import LlmProfile, PipelineRun, ReportProject
 from app.services.context import build_context_pack, has_real_examples
-from app.services.llm import LlmClient, config_from_profile, config_from_settings
+from app.services.llm import (
+    LlmCancelled,
+    LlmClient,
+    config_from_profile,
+    config_from_settings,
+)
 from app.services.style_cache import (
     fingerprint_examples,
     load_style_notes,
@@ -21,7 +26,7 @@ from app.services.style_cache import (
 
 
 class GenerationCancelled(Exception):
-    """Raised when a background generate is cancelled between stages."""
+    """Raised when a background generate is cancelled (between or mid LLM call)."""
 
 
 STYLE_NOTES_PROMPT = """You analyze example reports to extract reusable *writing style* signals.
@@ -504,6 +509,30 @@ class ReportPipeline:
         self._log_run(stage, "cancelled", "cancelled by user")
         raise GenerationCancelled(stage)
 
+    async def _chat(
+        self,
+        prompt: str,
+        *,
+        stage: str,
+        temperature: Optional[float] = None,
+    ) -> str:
+        """LLM chat that aborts in-flight HTTP when cancel is requested."""
+        try:
+            if temperature is None:
+                return await self.client.chat(
+                    prompt, cancel_check=self._cancel_check
+                )
+            return await self.client.chat(
+                prompt,
+                temperature=temperature,
+                cancel_check=self._cancel_check,
+            )
+        except LlmCancelled as exc:
+            self.project.status = "cancelled"
+            self.db.commit()
+            self._log_run(stage, "cancelled", "cancelled by user during LLM call")
+            raise GenerationCancelled(stage) from exc
+
     def _make_client(self) -> LlmClient:
         if self.project.llm_profile_id:
             profile = self.db.get(LlmProfile, self.project.llm_profile_id)
@@ -612,7 +641,7 @@ class ReportPipeline:
         self.db.commit()
         prompt = STYLE_NOTES_PROMPT.format(examples=self.pack["examples"])
         try:
-            notes = await self.client.chat(prompt, temperature=0.2)
+            notes = await self._chat(prompt, stage="style_notes", temperature=0.2)
             cleaned = sanitize_style_notes(notes, self.pack["examples"])
             save_style_notes(settings.style_cache_dir, key, cleaned)
             result = self._apply_style_notes(cleaned, key, from_cache=False)
@@ -635,6 +664,8 @@ class ReportPipeline:
                     )
                     self.db.commit()
             return result
+        except GenerationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             self.project.status = "error"
             self.db.commit()
@@ -663,12 +694,14 @@ class ReportPipeline:
             style_notes=self._style_notes_for_prompt(),
         )
         try:
-            outline = self._scrub_body(await self.client.chat(prompt))
+            outline = self._scrub_body(await self._chat(prompt, stage="outline"))
             self.project.outline_md = outline
             self.project.status = "outlined"
             self.db.commit()
             self._log_run("outline", "ok", outline[:2000])
             return outline
+        except GenerationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             self.project.status = "error"
             self.db.commit()
@@ -690,12 +723,14 @@ class ReportPipeline:
             style_notes=self._style_notes_for_prompt(),
         )
         try:
-            body = self._scrub_body(await self.client.chat(prompt))
+            body = self._scrub_body(await self._chat(prompt, stage="draft"))
             self.project.body_md = body
             self.project.status = "drafted"
             self.db.commit()
             self._log_run("draft", "ok", body[:2000])
             return body
+        except GenerationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             self.project.status = "error"
             self.db.commit()
@@ -719,12 +754,14 @@ class ReportPipeline:
             bleed_hints=self._bleed_hints_for_draft(self.project.body_md),
         )
         try:
-            critique = await self.client.chat(prompt, temperature=0.2)
+            critique = await self._chat(prompt, stage="critique", temperature=0.2)
             self.project.critique_md = critique
             self.project.status = "critiqued"
             self.db.commit()
             self._log_run("critique", "ok", critique[:2000])
             return critique
+        except GenerationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             self.project.status = "error"
             self.db.commit()
@@ -750,12 +787,14 @@ class ReportPipeline:
             bleed_hints=self._bleed_hints_for_draft(self.project.body_md),
         )
         try:
-            revised = self._scrub_body(await self.client.chat(prompt))
+            revised = self._scrub_body(await self._chat(prompt, stage="revise"))
             self.project.body_md = revised
             self.project.status = "ready"
             self.db.commit()
             self._log_run("revise", "ok", revised[:2000])
             return revised
+        except GenerationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             self.project.status = "error"
             self.db.commit()

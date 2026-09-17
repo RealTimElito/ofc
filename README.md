@@ -82,7 +82,8 @@ For true air-gap: build on a connected host, `docker save` the images, transfer,
      - `purpose=results` → metrics/tables for the new report
      - `purpose=examples` → prior report bodies (`example_body_column`)
 3. **Reports** — create a project, write the brief, tick files/queries, run **Full generate**
-   (the editor warns early if the configured LLM is unreachable or lists no models)
+   (runs in the background with live stage status; **Cancel** aborts the in-flight LLM HTTP
+   call). The editor warns early if the configured LLM is unreachable or lists no models
 4. Optionally **Import theme** from a `.docx` example (fonts, header/footer, logos) for Word export
 5. Edit the draft; export Markdown, HTML, or `.docx`
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -10,6 +12,10 @@ import httpx
 from app.config import Settings, get_settings
 from app.models import LlmProfile
 from app.services.crypto import decrypt_secret
+
+
+class LlmCancelled(Exception):
+    """Raised when cancel_check trips during an in-flight LLM HTTP request."""
 
 
 @dataclass
@@ -61,6 +67,7 @@ class LlmClient:
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> str:
         url = f"{self.config.base_url}/chat/completions"
         payload: dict[str, Any] = {
@@ -81,8 +88,16 @@ class LlmClient:
         }
         async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
             try:
-                response = await client.post(url, json=payload, headers=headers)
+                response = await self._post_with_cancel(
+                    client,
+                    url,
+                    payload=payload,
+                    headers=headers,
+                    cancel_check=cancel_check,
+                )
                 response.raise_for_status()
+            except LlmCancelled:
+                raise
             except httpx.HTTPStatusError as exc:
                 detail = (exc.response.text or "").strip()[:400]
                 raise RuntimeError(
@@ -99,6 +114,65 @@ class LlmClient:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError(f"Unexpected LLM response shape: {data!r}") from exc
+
+    async def _post_with_cancel(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        *,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+        cancel_check: Optional[Callable[[], bool]],
+    ) -> httpx.Response:
+        """POST, optionally aborting the HTTP request when cancel_check trips."""
+        if cancel_check is None:
+            return await client.post(url, json=payload, headers=headers)
+
+        post_task = asyncio.create_task(client.post(url, json=payload, headers=headers))
+
+        async def _watch_cancel() -> None:
+            while True:
+                if cancel_check():
+                    return
+                await asyncio.sleep(0.2)
+
+        watch_task = asyncio.create_task(_watch_cancel())
+        try:
+            done, _pending = await asyncio.wait(
+                {post_task, watch_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if watch_task in done and post_task not in done:
+                post_task.cancel()
+                try:
+                    await post_task
+                except (asyncio.CancelledError, httpx.HTTPError, OSError):
+                    pass
+                # Force-close transport so the peer stops generating if possible.
+                await client.aclose()
+                raise LlmCancelled("cancelled during LLM request")
+            watch_task.cancel()
+            try:
+                await watch_task
+            except asyncio.CancelledError:
+                pass
+            return post_task.result()
+        except LlmCancelled:
+            raise
+        except Exception:
+            if not post_task.done():
+                post_task.cancel()
+                try:
+                    await post_task
+                except (asyncio.CancelledError, httpx.HTTPError, OSError):
+                    pass
+            if not watch_task.done():
+                watch_task.cancel()
+                try:
+                    await watch_task
+                except asyncio.CancelledError:
+                    pass
+            raise
 
     async def ping(self) -> dict[str, Any]:
         """Lightweight connectivity check against /models if available."""
