@@ -43,6 +43,10 @@ nothing useful appears in the examples):
 
 ### Section naming
 Typical heading wording and order (quote the names used).
+If examples use both "Key results" and "Key metrics", treat them as *alternate*
+names for the same section — list the preferred wording once; never recommend
+emitting both headings in one report. Mark Summary as optional only when examples
+use it as a short wrap-up distinct from Key results.
 
 ### Voice & person
 Formality, tense, and person (e.g. third-person past, impersonal passive).
@@ -102,6 +106,8 @@ Key results (required when results_context has a metrics table):
 - Attach each row's Notes cell on the *same* bullet (parenthetical or "— note");
   never leave notes as orphan free lines between bullets, and never emit bare
   "None"/"N/A" note lines.
+- Use one results heading only ("Key results" *or* "Key metrics", not both).
+  Do not add a separate Summary that only restates the title/purpose.
 
 Outlook / next-steps bullets may only restate notes or constraints from
 results_context or the brief — never from examples. Do not reuse example
@@ -152,6 +158,8 @@ Language consistency (required when style notes are present):
 - Do not introduce metric names that do not appear in results.
 - Prefer section names from the richest prior-report examples when they fit the brief;
   do not invent extra sections or duplicate headings.
+- Emit metrics under one heading only (Key results *or* Key metrics — never both);
+  skip a Summary that only restates the title or "highlights KPIs" without findings.
 - If results/brief give no outlook content, keep Outlook empty or omit it — do not
   borrow prior-period recommendations.
 - Do not invent staffing, backlog-aging, capacity, or "planned bands" themes unless
@@ -505,6 +513,10 @@ def _scrub_style_note_line(line: str) -> str:
         if len(core) < 8:
             return ""
         body = core
+    # Drop mangled formulation lines left by mid-span claim scrub
+    # (unbalanced quotes/parens), e.g. 'Tickets closed" instead of …)'.
+    if body.count('"') % 2 == 1 or body.count("(") != body.count(")"):
+        return ""
     if _STOCK_STYLE_CLAIM_RE.search(body):
         return ""
     return f"{prefix}{body}".rstrip()
@@ -570,6 +582,20 @@ def sanitize_style_notes(notes: str, examples: str) -> str:
     return out + ("\n" if (notes or "").endswith("\n") else "")
 
 
+_HOLLOW_SUMMARY_RE = re.compile(
+    r"(?i)\b(?:highlights?\s+key\s+performance|key\s+performance\s+indicators|"
+    r"operations\s+summary\s+highlights|this\s+report\s+(?:provides|summarizes|"
+    r"highlights)|summary\s+of\s+(?:the\s+)?(?:quarter|period|operations))\b"
+)
+
+
+def _section_title_key(heading_line: str) -> str | None:
+    heading = _HEADING_LINE.match((heading_line or "").strip())
+    if not heading:
+        return None
+    return re.sub(r"[:.\d\s]+$", "", heading.group(2).strip().lower()).strip()
+
+
 def drop_empty_optional_sections(text: str) -> str:
     """Remove Outlook/Summary headings that have no bullets or body before the next heading."""
     raw = text or ""
@@ -579,18 +605,76 @@ def drop_empty_optional_sections(text: str) -> str:
     kept: list[str] = []
     i = 0
     while i < len(lines):
-        stripped = lines[i].strip()
-        heading = _HEADING_LINE.match(stripped)
-        if heading:
-            title = heading.group(2).strip().lower()
-            # Strip trailing punctuation / numbering: "Outlook", "Summary:"
-            title_key = re.sub(r"[:.\d\s]+$", "", title).strip()
-            if title_key in _OPTIONAL_EMPTY_SECTIONS:
+        title_key = _section_title_key(lines[i])
+        if title_key in _OPTIONAL_EMPTY_SECTIONS:
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            # Empty if next non-blank is another heading or EOF.
+            if j >= len(lines) or _HEADING_LINE.match(lines[j].strip()):
+                i = j
+                continue
+        kept.append(lines[i])
+        i += 1
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    if not out:
+        return out
+    return out + ("\n" if raw.endswith("\n") else "")
+
+
+def collapse_duplicate_results_sections(text: str) -> str:
+    """Keep the first Key results / Key metrics / Results block; drop later aliases."""
+    raw = text or ""
+    if not raw.strip():
+        return raw
+    lines = raw.replace("\r\n", "\n").split("\n")
+    kept: list[str] = []
+    seen_results = False
+    i = 0
+    while i < len(lines):
+        title_key = _section_title_key(lines[i])
+        if title_key in _KEY_RESULTS_SECTIONS:
+            if seen_results:
                 j = i + 1
-                while j < len(lines) and not lines[j].strip():
+                while j < len(lines) and not _HEADING_LINE.match(lines[j].strip()):
                     j += 1
-                # Empty if next non-blank is another heading or EOF.
-                if j >= len(lines) or _HEADING_LINE.match(lines[j].strip()):
+                i = j
+                continue
+            seen_results = True
+        kept.append(lines[i])
+        i += 1
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    if not out:
+        return out
+    return out + ("\n" if raw.endswith("\n") else "")
+
+
+def drop_hollow_filler_sections(text: str) -> str:
+    """Drop Summary sections that only restate purpose with no findings/metrics."""
+    raw = text or ""
+    if not raw.strip():
+        return raw
+    lines = raw.replace("\r\n", "\n").split("\n")
+    kept: list[str] = []
+    i = 0
+    while i < len(lines):
+        title_key = _section_title_key(lines[i])
+        if title_key == "summary":
+            j = i + 1
+            while j < len(lines) and not _HEADING_LINE.match(lines[j].strip()):
+                j += 1
+            body = "\n".join(lines[i + 1 : j]).strip()
+            if not body:
+                i = j
+                continue
+            # Ignore year/quarter tokens so "Q3 2025 … highlights KPIs" still counts hollow.
+            substance = re.sub(r"\b(?:20\d{2}|q[1-4])\b", " ", body, flags=re.IGNORECASE)
+            has_figure = bool(re.search(r"\d", substance))
+            has_metric_bullet = any(
+                _METRIC_BULLET_LINE.match(ln.strip()) for ln in lines[i + 1 : j] if ln.strip()
+            )
+            if not has_figure and not has_metric_bullet:
+                if _HOLLOW_SUMMARY_RE.search(body) or len(body.split()) <= 22:
                     i = j
                     continue
         kept.append(lines[i])
@@ -1030,7 +1114,9 @@ def sanitize_generated_markdown(text: str) -> str:
     if not out:
         return out
     out = out + ("\n" if raw.endswith("\n") else "")
-    return drop_empty_optional_sections(out)
+    out = drop_empty_optional_sections(out)
+    out = collapse_duplicate_results_sections(out)
+    return drop_hollow_filler_sections(out)
 
 
 class ReportPipeline:
