@@ -47,6 +47,8 @@ export type LibraryDocument = {
   source_report_id: number | null;
   role: string;
   has_theme_docx?: boolean;
+  is_stub?: boolean;
+  stub_reason?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -152,6 +154,7 @@ export const api = {
   deleteFile: (id: number) => request(`/api/files/${id}`, { method: "DELETE" }),
 
   listDocuments: () => request<LibraryDocument[]>("/api/documents"),
+  listDocumentStubs: () => request<LibraryDocument[]>("/api/documents/stubs"),
   createDocument: (body: Record<string, unknown>) =>
     request<LibraryDocument>("/api/documents", {
       method: "POST",
@@ -163,6 +166,12 @@ export const api = {
       method: "PATCH",
     }),
   deleteDocument: (id: number) => request(`/api/documents/${id}`, { method: "DELETE" }),
+  pruneDocumentStubs: (ids?: number[]) =>
+    request<{ deleted_ids: number[]; deleted_count: number }>("/api/documents/prune-stubs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ids != null ? { ids } : {}),
+    }),
 
   listConnections: () => request<DbConnection[]>("/api/db/connections"),
   createConnection: (body: Record<string, unknown>) =>

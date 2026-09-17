@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, DbConnection, LibraryDocument, SavedQuery, UploadedFile } from "../api";
 
 export default function SourcesPage() {
@@ -8,6 +8,9 @@ export default function SourcesPage() {
   const [queries, setQueries] = useState<SavedQuery[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string>("");
+  const [stubsOnly, setStubsOnly] = useState(false);
+  const [selectedDocIds, setSelectedDocIds] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
 
   const [role, setRole] = useState("context");
   const [connForm, setConnForm] = useState({
@@ -35,6 +38,10 @@ export default function SourcesPage() {
     setDocuments(d);
     setConnections(c);
     setQueries(q);
+    setSelectedDocIds((prev) => {
+      const alive = new Set(d.map((doc) => doc.id));
+      return new Set([...prev].filter((id) => alive.has(id)));
+    });
     if (!queryForm.connection_id && c[0]) {
       setQueryForm((prev) => ({ ...prev, connection_id: String(c[0].id) }));
     }
@@ -43,6 +50,76 @@ export default function SourcesPage() {
   useEffect(() => {
     void load().catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
+
+  const stubDocs = useMemo(() => documents.filter((d) => d.is_stub), [documents]);
+  const visibleDocs = useMemo(
+    () => (stubsOnly ? stubDocs : documents),
+    [documents, stubDocs, stubsOnly],
+  );
+
+  function toggleDocSelected(id: number) {
+    setSelectedDocIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectVisibleStubs() {
+    const stubIds = visibleDocs.filter((d) => d.is_stub).map((d) => d.id);
+    setSelectedDocIds((prev) => {
+      const allSelected = stubIds.length > 0 && stubIds.every((id) => prev.has(id));
+      const next = new Set(prev);
+      if (allSelected) {
+        for (const id of stubIds) next.delete(id);
+      } else {
+        for (const id of stubIds) next.add(id);
+      }
+      return next;
+    });
+  }
+
+  async function onDeleteSelectedStubs() {
+    const ids = [...selectedDocIds].filter((id) =>
+      documents.some((d) => d.id === id && d.is_stub),
+    );
+    if (!ids.length) return;
+    if (!window.confirm(`Delete ${ids.length} selected stub document(s)?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.pruneDocumentStubs(ids);
+      setSelectedDocIds(new Set());
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRemoveAllStubs() {
+    if (!stubDocs.length) return;
+    if (
+      !window.confirm(
+        `Remove all ${stubDocs.length} library stub(s)? Smoke/short placeholders that pollute examples will be deleted.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.pruneDocumentStubs();
+      setSelectedDocIds(new Set());
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onUpload(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -94,6 +171,10 @@ export default function SourcesPage() {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
+
+  const selectedStubCount = [...selectedDocIds].filter((id) =>
+    documents.some((d) => d.id === id && d.is_stub),
+  ).length;
 
   return (
     <>
@@ -182,14 +263,62 @@ export default function SourcesPage() {
         <p className="field-hint">
           Finished reports (via Mark done) and extracted <code>.docx</code> / Markdown uploads.
           Same roles as uploads — usually <em>example</em> for the report editor&apos;s Examples
-          picker (library wins over a duplicate upload of the same file).
+          picker (library wins over a duplicate upload of the same file). Short smoke/# Smoke
+          stubs are flagged so they can be pruned before they pollute example packs.
         </p>
+        {stubDocs.length > 0 && (
+          <div className="warn-banner" style={{ marginBottom: "0.75rem" }}>
+            <strong>{stubDocs.length} likely stub{stubDocs.length === 1 ? "" : "s"}</strong>
+            <span className="warn-banner-detail">
+              {" "}
+              — smoke tests or short placeholders the pipeline already skips when richer
+              examples exist.
+            </span>
+          </div>
+        )}
+        <div className="row" style={{ marginBottom: "0.75rem", flexWrap: "wrap", gap: "0.5rem" }}>
+          <label className="row" style={{ gap: "0.4rem", alignItems: "center" }}>
+            <input
+              type="checkbox"
+              checked={stubsOnly}
+              onChange={(e) => setStubsOnly(e.target.checked)}
+            />
+            Show stubs only
+          </label>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!stubDocs.length || busy}
+            onClick={toggleSelectVisibleStubs}
+          >
+            Select visible stubs
+          </button>
+          <button
+            type="button"
+            className="danger"
+            disabled={!selectedStubCount || busy}
+            onClick={() => void onDeleteSelectedStubs()}
+          >
+            Delete selected ({selectedStubCount})
+          </button>
+          <button
+            type="button"
+            className="danger"
+            disabled={!stubDocs.length || busy}
+            onClick={() => void onRemoveAllStubs()}
+          >
+            Remove stubs
+          </button>
+        </div>
         {documents.length === 0 ? (
           <p className="empty">Library is empty. Mark a report done or upload a .docx / .md file.</p>
+        ) : visibleDocs.length === 0 ? (
+          <p className="empty">No stub documents match the current filter.</p>
         ) : (
           <table>
             <thead>
               <tr>
+                <th aria-label="Select" />
                 <th>Title</th>
                 <th>Format</th>
                 <th>Role</th>
@@ -198,12 +327,29 @@ export default function SourcesPage() {
               </tr>
             </thead>
             <tbody>
-              {documents.map((d) => (
-                <tr key={d.id}>
+              {visibleDocs.map((d) => (
+                <tr key={d.id} className={d.is_stub ? "row-stub" : undefined}>
+                  <td>
+                    {d.is_stub ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedDocIds.has(d.id)}
+                        onChange={() => toggleDocSelected(d.id)}
+                        aria-label={`Select stub ${d.title}`}
+                      />
+                    ) : null}
+                  </td>
                   <td>
                     <div>{d.title}</div>
                     {d.filename && (
                       <code style={{ fontSize: "0.75rem" }}>{d.filename}</code>
+                    )}
+                    {d.is_stub && d.stub_reason && (
+                      <div>
+                        <span className="chip chip-stub" title={d.stub_reason}>
+                          stub · {d.stub_reason}
+                        </span>
+                      </div>
                     )}
                   </td>
                   <td>

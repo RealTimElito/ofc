@@ -24,6 +24,8 @@ from app.api.schemas import (
     LlmProfileOut,
     MarkDoneIn,
     PipelineRunOut,
+    PruneStubsIn,
+    PruneStubsOut,
     QueryPreviewOut,
     ReportProjectIn,
     ReportProjectOut,
@@ -142,6 +144,51 @@ def _invalidate_style_after_examples_changed(db: Session) -> int:
 
 def _role_includes_examples(role: str | None) -> bool:
     return (role or "") in ("example", "both", "examples")
+
+
+def _document_out(row: Document) -> DocumentOut:
+    from app.services.context import stub_example_reason
+
+    reason = stub_example_reason(row.body_md or "")
+    return DocumentOut(
+        id=row.id,
+        title=row.title,
+        filename=row.filename,
+        format=row.format,
+        body_md=row.body_md,
+        source_report_id=row.source_report_id,
+        role=row.role,
+        has_theme_docx=bool(row.has_theme_docx),
+        is_stub=reason is not None,
+        stub_reason=reason,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _unlink_library_docx(stored: str | None) -> None:
+    stored = (stored or "").strip()
+    if not stored:
+        return
+    path = Path(stored)
+    settings = get_settings()
+    try:
+        if path.is_file() and path.resolve().is_relative_to(
+            settings.library_docx_dir.resolve()
+        ):
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _delete_document_row(db: Session, row: Document) -> bool:
+    """Delete a library document and its durable docx copy. Returns was_example."""
+    was_example = _role_includes_examples(row.role)
+    stored = getattr(row, "stored_docx_path", None)
+    db.delete(row)
+    db.flush()
+    _unlink_library_docx(stored)
+    return was_example
 
 
 def _persist_library_docx(src: Path) -> str:
@@ -422,7 +469,15 @@ def delete_file(file_id: int, db: Session = Depends(get_db)):
 
 @router.get("/documents", response_model=list[DocumentOut])
 def list_documents(db: Session = Depends(get_db)):
-    return db.query(Document).order_by(Document.id.desc()).all()
+    rows = db.query(Document).order_by(Document.id.desc()).all()
+    return [_document_out(row) for row in rows]
+
+
+@router.get("/documents/stubs", response_model=list[DocumentOut])
+def list_document_stubs(db: Session = Depends(get_db)):
+    """Library docs that match pipeline stub heuristics (smoke / short placeholders)."""
+    rows = db.query(Document).order_by(Document.id.desc()).all()
+    return [out for row in rows if (out := _document_out(row)).is_stub]
 
 
 @router.post("/documents", response_model=DocumentOut)
@@ -441,7 +496,7 @@ def create_document(body: DocumentIn, db: Session = Depends(get_db)):
     db.refresh(row)
     if _role_includes_examples(body.role):
         _invalidate_style_after_examples_changed(db)
-    return row
+    return _document_out(row)
 
 
 @router.patch("/documents/{doc_id}", response_model=DocumentOut)
@@ -457,7 +512,38 @@ def update_document_role(doc_id: int, role: str, db: Session = Depends(get_db)):
     db.refresh(row)
     if _role_includes_examples(prev) or _role_includes_examples(role):
         _invalidate_style_after_examples_changed(db)
-    return row
+    return _document_out(row)
+
+
+@router.post("/documents/prune-stubs", response_model=PruneStubsOut)
+def prune_document_stubs(body: PruneStubsIn, db: Session = Depends(get_db)):
+    """Delete selected stub docs, or all library stubs when ids is omitted/empty."""
+    from app.services.context import is_stub_example
+
+    rows = db.query(Document).order_by(Document.id.desc()).all()
+    stubs = [row for row in rows if is_stub_example(row.body_md or "")]
+    if body.ids is not None:
+        wanted = set(body.ids)
+        stubs = [row for row in stubs if row.id in wanted]
+        missing = wanted - {row.id for row in stubs}
+        if missing:
+            # Non-stubs or unknown ids — refuse so the UI cannot wipe real docs by mistake
+            raise HTTPException(
+                400,
+                f"ids are not detected stubs (or missing): {sorted(missing)}",
+            )
+
+    deleted_ids: list[int] = []
+    any_example = False
+    for row in stubs:
+        did = row.id
+        if _delete_document_row(db, row):
+            any_example = True
+        deleted_ids.append(did)
+    db.commit()
+    if any_example and deleted_ids:
+        _invalidate_style_after_examples_changed(db)
+    return PruneStubsOut(deleted_ids=deleted_ids, deleted_count=len(deleted_ids))
 
 
 @router.delete("/documents/{doc_id}")
@@ -465,20 +551,8 @@ def delete_document(doc_id: int, db: Session = Depends(get_db)):
     row = db.get(Document, doc_id)
     if not row:
         raise HTTPException(404, "Document not found")
-    was_example = _role_includes_examples(row.role)
-    stored = (getattr(row, "stored_docx_path", None) or "").strip()
-    db.delete(row)
+    was_example = _delete_document_row(db, row)
     db.commit()
-    if stored:
-        path = Path(stored)
-        settings = get_settings()
-        try:
-            if path.is_file() and path.resolve().is_relative_to(
-                settings.library_docx_dir.resolve()
-            ):
-                path.unlink()
-        except OSError:
-            pass
     if was_example:
         _invalidate_style_after_examples_changed(db)
     return {"ok": True}
@@ -934,7 +1008,7 @@ def mark_report_done(
     db.commit()
     doc = _archive_report_to_library(db, row, role=role)
     db.refresh(row)
-    return {"report": _project_out(row), "document": DocumentOut.model_validate(doc)}
+    return {"report": _project_out(row), "document": _document_out(doc)}
 
 
 @router.get("/reports/{report_id}/export.md")

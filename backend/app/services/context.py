@@ -100,20 +100,33 @@ def _as_context_block(title: str, body: str) -> str:
     return f"### {title}\n\n{body}\n"
 
 
-def _is_stub_example(body: str) -> bool:
-    """True for tiny placeholder examples that dilute style extraction."""
+def stub_example_reason(body: str) -> str | None:
+    """Why a library body looks like a stub, or None if it seems real.
+
+    Same heuristics the pipeline uses to skip contaminated example text
+    (smoke/# Smoke shorts, tiny placeholders, heading-less fragments).
+    """
     text = (body or "").strip()
     if len(text) < 80:
-        return True
+        return "very short (<80 chars)"
     lowered = text.lower()
     if lowered.startswith("# smoke") and len(text) < 400:
-        return True
+        return "smoke / short stub (# smoke…)"
     if lowered.startswith("sample prior report") and len(text) < 400:
-        return True
+        return "sample prior report placeholder"
     # Theme extracts / fragments without report section headings
     if len(text) < 220 and "## " not in text and not text.lstrip().startswith("# "):
-        return True
-    return False
+        return "short fragment without section headings"
+    return None
+
+
+def is_stub_example(body: str) -> bool:
+    """True for tiny placeholder examples that dilute style extraction."""
+    return stub_example_reason(body) is not None
+
+
+# Backward-compatible private alias used by older call sites / tests.
+_is_stub_example = is_stub_example
 
 
 def _tokens(text: str) -> set[str]:
@@ -208,7 +221,7 @@ def gather_files_as(
         if not row:
             continue
         text = read_upload_text(Path(row.stored_path))
-        if as_role == "example" and _is_stub_example(text):
+        if as_role == "example" and is_stub_example(text):
             continue
         parts.append(
             _as_context_block(
@@ -230,7 +243,7 @@ def gather_documents_as(
         row = db.get(Document, did)
         if not row:
             continue
-        if as_role == "example" and _is_stub_example(row.body_md or ""):
+        if as_role == "example" and is_stub_example(row.body_md or ""):
             continue
         meta = f"format={row.format}"
         if row.filename:

@@ -944,6 +944,17 @@ button.linkish:disabled {
   font-size: 0.8rem;
 }
 
+.chip-stub {
+  margin-top: 0.35rem;
+  background: color-mix(in srgb, var(--warn) 14%, white);
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+}
+
+tr.row-stub td {
+  background: color-mix(in srgb, var(--warn) 5%, transparent);
+}
+
 .check-list {
   display: flex;
   flex-direction: column;

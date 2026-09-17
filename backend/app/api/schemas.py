@@ -106,10 +106,23 @@ class DocumentOut(BaseModel):
     source_report_id: Optional[int]
     role: str
     has_theme_docx: bool = False
+    is_stub: bool = False
+    stub_reason: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class PruneStubsIn(BaseModel):
+    """Delete library stubs. Omit ids (or pass null) to remove all detected stubs."""
+
+    ids: Optional[list[int]] = None
+
+
+class PruneStubsOut(BaseModel):
+    deleted_ids: list[int]
+    deleted_count: int
 
 
 class ReportProjectIn(BaseModel):
