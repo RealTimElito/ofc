@@ -144,6 +144,13 @@ class ReportTheme(BaseModel):
     header_logo: Optional[str] = None
     footer_logo: Optional[str] = None
     source_label: str = ""
+    margin_top_in: Optional[float] = None
+    margin_bottom_in: Optional[float] = None
+    margin_left_in: Optional[float] = None
+    margin_right_in: Optional[float] = None
+    body_size_pt: Optional[float] = None
+    heading_size_pt: Optional[float] = None
+    title_size_pt: Optional[float] = None
 
 
 class ThemeImportIn(BaseModel):

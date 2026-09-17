@@ -61,6 +61,13 @@ export type ReportTheme = {
   header_logo: string | null;
   footer_logo: string | null;
   source_label: string;
+  margin_top_in?: number | null;
+  margin_bottom_in?: number | null;
+  margin_left_in?: number | null;
+  margin_right_in?: number | null;
+  body_size_pt?: number | null;
+  heading_size_pt?: number | null;
+  title_size_pt?: number | null;
 };
 
 export type ReportProject = {

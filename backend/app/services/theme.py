@@ -21,7 +21,16 @@ THEME_KEYS = (
     "header_logo",
     "footer_logo",
     "source_label",
+    "margin_top_in",
+    "margin_bottom_in",
+    "margin_left_in",
+    "margin_right_in",
+    "body_size_pt",
+    "heading_size_pt",
+    "title_size_pt",
 )
+
+_EMU_PER_INCH = 914400.0
 
 
 def empty_theme() -> dict[str, Any]:
@@ -33,7 +42,36 @@ def empty_theme() -> dict[str, Any]:
         "header_logo": None,
         "footer_logo": None,
         "source_label": "",
+        "margin_top_in": None,
+        "margin_bottom_in": None,
+        "margin_left_in": None,
+        "margin_right_in": None,
+        "body_size_pt": None,
+        "heading_size_pt": None,
+        "title_size_pt": None,
     }
+
+
+def theme_has_visuals(theme: dict[str, Any]) -> bool:
+    """True when export should apply theme chrome/fonts/margins."""
+    if theme.get("body_font") or theme.get("heading_font"):
+        return True
+    if theme.get("header_text") or theme.get("footer_text"):
+        return True
+    if theme.get("header_logo") or theme.get("footer_logo"):
+        return True
+    for key in (
+        "margin_top_in",
+        "margin_bottom_in",
+        "margin_left_in",
+        "margin_right_in",
+        "body_size_pt",
+        "heading_size_pt",
+        "title_size_pt",
+    ):
+        if theme.get(key) is not None:
+            return True
+    return False
 
 
 def parse_theme_json(raw: Optional[str]) -> dict[str, Any]:
@@ -73,6 +111,25 @@ def _font_name_from_style(style) -> Optional[str]:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _pt_from_style(style) -> Optional[float]:
+    try:
+        size = style.font.size
+        if size is not None:
+            return round(float(size.pt), 2)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _emu_to_inches(emu) -> Optional[float]:
+    if emu is None:
+        return None
+    try:
+        return round(int(emu) / _EMU_PER_INCH, 4)
+    except (TypeError, ValueError):
+        return None
 
 
 def _collect_paragraph_text(paragraphs) -> str:
@@ -126,7 +183,7 @@ def extract_theme_from_docx(
     *,
     source_label: str = "",
 ) -> dict[str, Any]:
-    """Read fonts, header/footer text, and logos from a .docx example."""
+    """Read fonts, header/footer text, logos, margins, and sizes from a .docx."""
     if assets_dir.exists():
         shutil.rmtree(assets_dir)
     assets_dir.mkdir(parents=True, exist_ok=True)
@@ -136,16 +193,25 @@ def extract_theme_from_docx(
     theme["source_label"] = source_label or docx_path.name
 
     theme["body_font"] = _font_name_from_style(doc.styles["Normal"])
+    theme["body_size_pt"] = _pt_from_style(doc.styles["Normal"])
     for style_name in ("Heading 1", "Title", "Heading 2"):
         try:
-            font = _font_name_from_style(doc.styles[style_name])
+            style = doc.styles[style_name]
         except KeyError:
             continue
-        if font:
+        font = _font_name_from_style(style)
+        if font and not theme["heading_font"]:
             theme["heading_font"] = font
-            break
+        size = _pt_from_style(style)
+        if size is not None:
+            if style_name == "Title" and theme["title_size_pt"] is None:
+                theme["title_size_pt"] = size
+            elif style_name.startswith("Heading") and theme["heading_size_pt"] is None:
+                theme["heading_size_pt"] = size
     if not theme["heading_font"]:
         theme["heading_font"] = theme["body_font"]
+    if theme["title_size_pt"] is None and theme["heading_size_pt"] is not None:
+        theme["title_size_pt"] = theme["heading_size_pt"]
 
     # Fallback: first body run fonts
     if not theme["body_font"]:
@@ -163,6 +229,11 @@ def extract_theme_from_docx(
     footer_logo: Optional[str] = None
 
     for section in doc.sections:
+        if theme["margin_top_in"] is None:
+            theme["margin_top_in"] = _emu_to_inches(section.top_margin)
+            theme["margin_bottom_in"] = _emu_to_inches(section.bottom_margin)
+            theme["margin_left_in"] = _emu_to_inches(section.left_margin)
+            theme["margin_right_in"] = _emu_to_inches(section.right_margin)
         header = section.header
         footer = section.footer
         ht = _collect_paragraph_text(header.paragraphs)
@@ -194,8 +265,28 @@ def _apply_font_to_run(run, font_name: Optional[str], size_pt: float | None = No
         r_fonts = r_pr.get_or_add_rFonts()
         r_fonts.set(qn("w:ascii"), font_name)
         r_fonts.set(qn("w:hAnsi"), font_name)
+        r_fonts.set(qn("w:eastAsia"), font_name)
+        r_fonts.set(qn("w:cs"), font_name)
     if size_pt is not None:
         run.font.size = Pt(size_pt)
+
+
+def _apply_font_to_style(style, font_name: Optional[str], size_pt: float | None = None) -> None:
+    if not font_name and size_pt is None:
+        return
+    try:
+        if font_name:
+            style.font.name = font_name
+            r_pr = style._element.get_or_add_rPr()
+            r_fonts = r_pr.get_or_add_rFonts()
+            r_fonts.set(qn("w:ascii"), font_name)
+            r_fonts.set(qn("w:hAnsi"), font_name)
+            r_fonts.set(qn("w:eastAsia"), font_name)
+            r_fonts.set(qn("w:cs"), font_name)
+        if size_pt is not None:
+            style.font.size = Pt(size_pt)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def apply_theme_to_document(
@@ -203,46 +294,64 @@ def apply_theme_to_document(
     theme: dict[str, Any],
     assets_dir: Path,
 ) -> None:
-    """Apply fonts and header/footer chrome to an open Document."""
+    """Apply fonts, margins, and header/footer chrome to an open Document."""
     body_font = theme.get("body_font") or "Calibri"
     heading_font = theme.get("heading_font") or body_font
+    body_size = theme.get("body_size_pt")
+    heading_size = theme.get("heading_size_pt")
+    title_size = theme.get("title_size_pt") or heading_size
 
-    try:
-        normal = doc.styles["Normal"]
-        normal.font.name = body_font
-        normal.font.size = Pt(11)
-        r_pr = normal._element.get_or_add_rPr()
-        r_fonts = r_pr.get_or_add_rFonts()
-        r_fonts.set(qn("w:ascii"), body_font)
-        r_fonts.set(qn("w:hAnsi"), body_font)
-    except Exception:  # noqa: BLE001
-        pass
-
+    _apply_font_to_style(
+        doc.styles["Normal"],
+        body_font,
+        float(body_size) if body_size is not None else 11,
+    )
+    _apply_font_to_style(
+        doc.styles["Title"],
+        heading_font,
+        float(title_size) if title_size is not None else None,
+    )
     for level in range(1, 5):
         try:
             style = doc.styles[f"Heading {level}"]
-            style.font.name = heading_font
-            r_pr = style._element.get_or_add_rPr()
-            r_fonts = r_pr.get_or_add_rFonts()
-            r_fonts.set(qn("w:ascii"), heading_font)
-            r_fonts.set(qn("w:hAnsi"), heading_font)
-        except Exception:  # noqa: BLE001
+        except KeyError:
             continue
+        size = float(heading_size) if heading_size is not None else None
+        _apply_font_to_style(style, heading_font, size)
 
     if not doc.sections:
         return
     section = doc.sections[0]
+    for attr, key in (
+        ("top_margin", "margin_top_in"),
+        ("bottom_margin", "margin_bottom_in"),
+        ("left_margin", "margin_left_in"),
+        ("right_margin", "margin_right_in"),
+    ):
+        inches = theme.get(key)
+        if inches is None:
+            continue
+        try:
+            setattr(section, attr, Inches(float(inches)))
+        except (TypeError, ValueError):
+            continue
+
     header = section.header
     footer = section.footer
 
-    # Clear default empty para content carefully
-    def _fill_chrome(container, text: str, logo_name: Optional[str]) -> None:
-        # Use first paragraph; add another for text if logo present
+    def _fill_chrome(
+        container,
+        text: str,
+        logo_name: Optional[str],
+        *,
+        align=WD_PARAGRAPH_ALIGNMENT.LEFT,
+    ) -> None:
         while len(container.paragraphs) > 1:
             p = container.paragraphs[-1]
             p._element.getparent().remove(p._element)
         para = container.paragraphs[0]
         para.clear()
+        para.alignment = align
         logo_path = assets_dir / logo_name if logo_name else None
         if logo_path and logo_path.is_file():
             run = para.add_run()
@@ -250,14 +359,23 @@ def apply_theme_to_document(
                 run.add_picture(str(logo_path), width=Inches(1.15))
             except Exception:  # noqa: BLE001
                 pass
-            para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
             if text:
-                text_para = container.add_paragraph()
-                run = text_para.add_run(text)
+                # Keep logo + caption on one line when practical
+                run = para.add_run(f"  {text}")
                 _apply_font_to_run(run, body_font, 9)
         elif text:
             run = para.add_run(text)
             _apply_font_to_run(run, body_font, 9)
 
-    _fill_chrome(header, theme.get("header_text") or "", theme.get("header_logo"))
-    _fill_chrome(footer, theme.get("footer_text") or "", theme.get("footer_logo"))
+    _fill_chrome(
+        header,
+        theme.get("header_text") or "",
+        theme.get("header_logo"),
+        align=WD_PARAGRAPH_ALIGNMENT.LEFT,
+    )
+    _fill_chrome(
+        footer,
+        theme.get("footer_text") or "",
+        theme.get("footer_logo"),
+        align=WD_PARAGRAPH_ALIGNMENT.CENTER,
+    )
