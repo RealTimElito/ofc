@@ -48,7 +48,9 @@ export default function SettingsPage() {
           <h1>LLM &amp; settings</h1>
           <p>
             Point OFC at your air-gapped OpenAI-compatible endpoint. Credentials stay on this
-            machine (encrypted at rest).
+            machine (encrypted at rest). A saved <strong>default profile</strong> overrides the{" "}
+            <code>.env</code> base URL/model for generate; if none is marked default,{" "}
+            <code>.env</code> is used.
           </p>
         </div>
       </div>

@@ -77,14 +77,18 @@ For true air-gap: build on a connected host, `docker save` the images, transfer,
 
 1. **LLM & settings** — add a profile (base URL, model, API key) or rely on `.env`
 2. **Sources**
-   - Upload `.md` / `.txt` / `.csv` / `.json` as **context**, **example**, or **both**
+   - Upload `.md` / `.txt` / `.csv` / `.json` / `.docx` as **context**, **example**, or **both**
    - Add a DB connection (SQLite path or Postgres/MySQL DSN) and saved SELECT queries
      - `purpose=results` → metrics/tables for the new report
      - `purpose=examples` → prior report bodies (`example_body_column`)
+   - Review the document library: short smoke/placeholder entries are flagged as **stubs** —
+     prune them so they do not dilute example packs
 3. **Reports** — create a project, write the brief, tick files/queries, run **Full generate**
    (runs in the background with live stage status; **Cancel** aborts the in-flight LLM HTTP
-   call). The editor warns early if the configured LLM is unreachable or lists no models
-4. Optionally **Import theme** from a `.docx` example (fonts, header/footer, logos) for Word export
+   call). The editor warns early if the configured LLM is unreachable or lists no models.
+   If a draft still echoes example-only phrasing, use **Scrub example phrasing**
+4. Optionally **Import theme** from a `.docx` example or library doc (fonts, header/footer,
+   logos) for Word export
 5. Edit the draft; export Markdown, HTML, or `.docx`
 
 ### Sample DB hints

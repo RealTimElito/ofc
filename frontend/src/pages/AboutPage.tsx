@@ -98,7 +98,8 @@ export default function AboutPage() {
             </li>
             <li>
               <strong>Document library</strong> — finished reports and imported documents available
-              as examples
+              as examples. Short smoke/placeholder bodies are flagged as <strong>stubs</strong>;
+              prune them on Sources before they pollute example packs
             </li>
             <li>
               <strong>Database</strong> — SQLite path or Postgres/MySQL DSN; only{" "}
@@ -110,10 +111,12 @@ export default function AboutPage() {
             </li>
           </ul>
           <p className="about-note">
-            Nav <strong>Sources</strong> is where you upload/tag material. On each report,{" "}
-            <strong>Examples</strong> set wording and house style;{" "}
+            Nav <strong>Sources</strong> is where you upload/tag material and prune library stubs.
+            On each report, <strong>Examples</strong> set wording and house style;{" "}
             <strong>Context &amp; results</strong> set the facts. The pipeline extracts style
-            notes from examples and prefers those formulations in draft and revise.
+            notes from examples (cached per example-set fingerprint) and prefers those
+            formulations in draft and revise. If a draft still echoes example-only phrasing, use{" "}
+            <strong>Scrub example phrasing</strong> in the editor.
           </p>
         </div>
       </div>
