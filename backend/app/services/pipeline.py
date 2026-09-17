@@ -61,7 +61,8 @@ Do not treat example-only metric names as required vocabulary for new reports.
 ### Metrics & findings
 How numbers, comparisons, and results are stated (units, precision, hedging).
 Show the *pattern* (e.g. "Tickets closed: [N]") — not the example numbers.
-Do not list stock outcome phrases (e.g. "within planned bands") — those are claims.
+Do not list stock outcome phrases (e.g. "within planned bands", "throughput
+remained…") — those are period-specific claims, not reusable templates.
 
 ### Hedging & certainty
 How claims are qualified (e.g. "indicates", "suggests", "was observed").
@@ -93,8 +94,17 @@ OUTLINE_PROMPT = """Title: {title}
 Produce a structured Markdown outline for the report. Prefer section names and
 ordering that match the style notes / examples when they fit the brief and results.
 Include bullet points of what each section must cover, grounded only in the brief
-and results. Outlook / next-steps bullets may only restate notes or constraints
-from results_context or the brief — never from examples. Do not reuse example
+and results.
+
+Key results (required when results_context has a metrics table):
+- Every data row must appear as its own bullet (label + value + unit).
+- Do not omit rows such as MTTR / SLA / change-success when they appear in results.
+- Attach each row's Notes cell on the *same* bullet (parenthetical or "— note");
+  never leave notes as orphan free lines between bullets, and never emit bare
+  "None"/"N/A" note lines.
+
+Outlook / next-steps bullets may only restate notes or constraints from
+results_context or the brief — never from examples. Do not reuse example
 openers, staffing/backlog/"planned bands" themes, or prior-period recommendations.
 If results/brief give no outlook content, omit Outlook or leave it empty.
 Do not write the full report yet.
@@ -124,6 +134,12 @@ Write the full report in Markdown. Follow the outline.
 Every factual claim, figure, incident, and outlook/next-step bullet must be
 supported by results_context or the brief. If examples conflict with results,
 prefer results. Style notes and examples supply voice/structure only.
+
+Key results coverage (required):
+- Include *every* metric row from results_context tables (e.g. tickets, MTTR,
+  critical incidents, SLA, change success) — do not drop rows the outline missed.
+- Keep each note on the same bullet as its metric; no orphan note-only lines;
+  omit empty notes (None / N/A / null).
 
 Language consistency (required when style notes are present):
 - Prefer the same type of wording, section names, tense/person, terminology, metric
@@ -161,12 +177,15 @@ CRITIQUE_PROMPT = """You are reviewing a draft report written for an air-gapped 
 {bleed_hints}
 ---
 List concrete issues in these categories:
-1. Missing data or invented claims (vs results/brief)
+1. Missing data or invented claims (vs results/brief) — especially any results-table
+   metric row omitted from Key results (MTTR, SLA, etc.)
 2. Example-bleed: sentences, openers, or outlook/next-step bullets that match
    prior-report examples or style-note quotations but are not supported by
    results_context or the brief (flag even if stylistically fluent)
-3. Structure mismatches with the brief
-4. Language / formulation drift from the style notes (wrong section naming, voice,
+3. Orphan result-note lines (notes not on the same bullet as their metric) or
+   bare None/N/A note lines
+4. Structure mismatches with the brief
+5. Language / formulation drift from the style notes (wrong section naming, voice,
    terminology, metric phrasing, hedging, or closing *patterns* — not missing
    example-only facts)
 
@@ -215,7 +234,49 @@ _EMPTY_QUOTES = re.compile(r"[\"']\s*[\"']")
 _DANGLING_PUNCT = re.compile(r"\s*([,;:])\s*([.!;:]|$)")
 _MULTI_SPACE = re.compile(r"[ \t]{2,}")
 _OPTIONAL_EMPTY_SECTIONS = frozenset({"outlook", "summary"})
+_KEY_RESULTS_SECTIONS = frozenset({"key results", "key metrics", "results"})
 _HEADING_LINE = re.compile(r"^(#{1,6})\s+(\S.*)$")
+_METRIC_BULLET_LINE = re.compile(
+    r"^([ \t]*[-*•]\s+).+?:\s*\d",
+)
+# Stock outcome openers that must not survive into style_notes as "templates".
+_STOCK_STYLE_CLAIM_RE = re.compile(
+    r"(?i)\b(?:within\s+planned\s+bands|throughput\s+remained|"
+    r"backlog\s+aging(?:\s+over)?|staffing\s+for\s+change\s+windows|"
+    r"maintain\s+(?:current\s+)?staffing(?:\s+levels)?)\b"
+)
+_UNITISH_TOKENS = frozenset(
+    {
+        "hour",
+        "hours",
+        "pct",
+        "percent",
+        "percentage",
+        "count",
+        "ms",
+        "sec",
+        "secs",
+        "second",
+        "seconds",
+        "day",
+        "days",
+        "unit",
+        "units",
+        "value",
+        "metric",
+        "period",
+        "notes",
+        "note",
+        "none",
+        "null",
+        "n/a",
+    }
+)
+_NULLISH_NOTE = re.compile(r"^(none|null|n/?a|n\.a\.?)\s*$", re.IGNORECASE)
+_NULLISH_NOTE_TAIL = re.compile(
+    r"(?:\s*[—({\[]\s*|\s+[-–—]\s+)(?:none|null|n/?a|n\.a\.?)\s*[)\]}]?\s*$",
+    re.IGNORECASE,
+)
 
 
 def _norm_overlap_text(text: str) -> str:
@@ -417,6 +478,9 @@ def _scrub_style_note_line(line: str) -> str:
         return line.rstrip()
     if line.lstrip().startswith("#"):
         return line.rstrip()
+    # Drop lines that still carry stock example openers / outcome claims.
+    if _STOCK_STYLE_CLAIM_RE.search(line):
+        return ""
     bullet_m = re.match(r"^([ \t]*[-*•]\s+)", line)
     prefix = bullet_m.group(1) if bullet_m else ""
     body = line[len(prefix) :] if bullet_m else line
@@ -432,34 +496,70 @@ def _scrub_style_note_line(line: str) -> str:
     core = body.strip(" \"'")
     if len(core) < 8:
         return ""
+    # Hollow leftovers after claim scrub, e.g. '(instead of "SLA percentage")'.
+    if re.match(r"^\(?\s*instead of\b", core, re.IGNORECASE):
+        return ""
     # Bare pattern stubs like 'past (e.g.)' or dangling open paren.
     if core.endswith(("(e.g.", "(eg", "(for example")) or core.count("(") > core.count(")"):
         core = re.sub(r"\s*\([^)]*$", "", core).strip(" \"'")
         if len(core) < 8:
             return ""
         body = core
+    if _STOCK_STYLE_CLAIM_RE.search(body):
+        return ""
     return f"{prefix}{body}".rstrip()
 
 
 def sanitize_style_notes(notes: str, examples: str) -> str:
     """Strip transplanted example claims from style notes without omit placeholders.
 
-    Uses full claim spans only (no short soft n-grams) so reusable formulation
-    patterns like 'Focus next quarter on [ACTION]' survive.
+    Uses full claim spans plus longer soft n-grams so stock openers like
+    'within planned bands' cannot survive inside templated style bullets, while
+    short reusable stems like 'Focus next quarter on [ACTION]' still can.
     """
     text = notes or ""
-    if not text.strip() or not has_real_examples(examples):
+    if not text.strip():
         return text
-    for raw in sorted(_example_claim_spans(examples, min_len=20), key=len, reverse=True):
+
+    # Drop whole lines that still carry stock example openers before soft scrub
+    # (soft removal alone can leave hollow shells like 'Operations in [period]').
+    prefiltered: list[str] = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("#") or not line.strip():
+            prefiltered.append(line)
+            continue
+        if _STOCK_STYLE_CLAIM_RE.search(line):
+            continue
+        prefiltered.append(line)
+    text = "\n".join(prefiltered)
+
+    if not has_real_examples(examples):
+        cleaned_no_ex: list[str] = []
+        for line in text.splitlines():
+            scrubbed = _scrub_style_note_line(line)
+            if scrubbed == "" and line.strip():
+                continue
+            cleaned_no_ex.append(scrubbed)
+        out = re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned_no_ex)).strip()
+        return out + ("\n" if (notes or "").endswith("\n") else "")
+
+    claim_keys: list[str] = []
+    seen_keys: set[str] = set()
+    for raw in _example_claim_spans(examples, min_len=20):
         key = _norm_claim_key(raw)
         if len(key) < 20:
             continue
-        # Silent removal — placeholders like [example-specific claim omitted]
-        # confuse later draft prompts more than a slightly shorter note.
-        pattern = re.compile(re.escape(key), re.IGNORECASE)
-        text = pattern.sub("", text)
-        pattern_raw = re.compile(re.escape(raw), re.IGNORECASE)
-        text = pattern_raw.sub("", text)
+        for cand in [key, *_soft_subphrase_keys(key, min_words=4, min_len=24)]:
+            if cand in seen_keys:
+                continue
+            seen_keys.add(cand)
+            claim_keys.append(cand)
+    # Longer first so nested phrases collapse cleanly.
+    for key in sorted(claim_keys, key=len, reverse=True):
+        text = re.compile(re.escape(key), re.IGNORECASE).sub("", text)
+    for raw in sorted(_example_claim_spans(examples, min_len=20), key=len, reverse=True):
+        text = re.compile(re.escape(raw), re.IGNORECASE).sub("", text)
+
     cleaned: list[str] = []
     for line in text.splitlines():
         scrubbed = _scrub_style_note_line(line)
@@ -498,6 +598,268 @@ def drop_empty_optional_sections(text: str) -> str:
     out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
     if not out:
         return out
+    return out + ("\n" if raw.endswith("\n") else "")
+
+
+def _value_aliases(value: str) -> list[str]:
+    raw = (value or "").strip()
+    if not raw:
+        return []
+    out: list[str] = [raw.lower()]
+    try:
+        num = float(raw)
+    except ValueError:
+        return out
+    if num.is_integer():
+        out.append(str(int(num)))
+    else:
+        out.append(raw.rstrip("0").rstrip(".").lower())
+        out.append(f"{num:.1f}")
+        out.append(f"{num:.2f}")
+    # Dedupe preserving order.
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for item in out:
+        if item and item not in seen:
+            seen.add(item)
+            uniq.append(item)
+    return uniq
+
+
+def _metric_name_tokens(name: str) -> list[str]:
+    parts = re.split(r"[_\s/\-]+", (name or "").lower())
+    return [
+        p
+        for p in parts
+        if len(p) > 1 and p not in _UNITISH_TOKENS and p not in _BLEED_STOPWORDS
+    ]
+
+
+def _humanize_metric_label(name: str) -> str:
+    tokens = [t for t in re.split(r"[_\s]+", (name or "").strip()) if t]
+    pretty: list[str] = []
+    for tok in tokens:
+        low = tok.lower()
+        if low == "mttr":
+            pretty.append("MTTR")
+        elif low == "sla":
+            pretty.append("SLA")
+        elif low in {"pct", "percent", "percentage"}:
+            pretty.append("pct")
+        else:
+            pretty.append(low.capitalize())
+    return " ".join(pretty) or (name or "Metric")
+
+
+def extract_result_metrics(results_context: str) -> list[dict[str, str]]:
+    """Parse metric/value[/unit[/notes]] rows from results markdown tables."""
+    text = results_context or ""
+    if not text.strip():
+        return []
+    lines = text.replace("\r\n", "\n").split("\n")
+    metrics: list[dict[str, str]] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not _is_markdown_table_row(line):
+            i += 1
+            continue
+        header_cells = [c.strip().lower() for c in line.strip().strip("|").split("|")]
+        if i + 1 >= len(lines) or not _is_markdown_table_separator(lines[i + 1]):
+            i += 1
+            continue
+        # Require a metric-like column and a value column.
+        name_idx = next(
+            (
+                idx
+                for idx, h in enumerate(header_cells)
+                if h in {"metric", "name", "measure", "kpi", "indicator"}
+            ),
+            None,
+        )
+        value_idx = next(
+            (idx for idx, h in enumerate(header_cells) if h in {"value", "val", "amount"}),
+            None,
+        )
+        if name_idx is None or value_idx is None:
+            i += 1
+            continue
+        unit_idx = next(
+            (idx for idx, h in enumerate(header_cells) if h in {"unit", "units"}),
+            None,
+        )
+        notes_idx = next(
+            (idx for idx, h in enumerate(header_cells) if h in {"notes", "note", "comment"}),
+            None,
+        )
+        i += 2
+        while i < len(lines) and _is_markdown_table_row(lines[i]):
+            if _is_markdown_table_separator(lines[i]):
+                i += 1
+                continue
+            cells = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+            if name_idx >= len(cells) or value_idx >= len(cells):
+                i += 1
+                continue
+            name = cells[name_idx].strip()
+            value = cells[value_idx].strip()
+            if not name or not value or _NULLISH_NOTE.match(value):
+                i += 1
+                continue
+            unit = (
+                cells[unit_idx].strip()
+                if unit_idx is not None and unit_idx < len(cells)
+                else ""
+            )
+            notes = (
+                cells[notes_idx].strip()
+                if notes_idx is not None and notes_idx < len(cells)
+                else ""
+            )
+            if notes and _NULLISH_NOTE.match(notes):
+                notes = ""
+            metrics.append(
+                {"name": name, "value": value, "unit": unit, "notes": notes}
+            )
+            i += 1
+        continue
+    # Dedupe by normalized name+value.
+    seen: set[str] = set()
+    uniq: list[dict[str, str]] = []
+    for row in metrics:
+        key = f"{row['name'].lower()}|{row['value'].lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(row)
+    return uniq
+
+
+def _metric_covered_in_text(body_cmp: str, metric: dict[str, str]) -> bool:
+    """True when value (+ a distinctive name token when available) appears in body."""
+    if not body_cmp:
+        return False
+    aliases = _value_aliases(metric.get("value") or "")
+    if not aliases or not any(a in body_cmp for a in aliases):
+        return False
+    tokens = _metric_name_tokens(metric.get("name") or "")
+    if not tokens:
+        return True
+    # Prefer acronyms / distinctive tokens (mttr, sla, tickets, …).
+    return any(tok in body_cmp for tok in tokens)
+
+
+def strip_orphan_result_notes(text: str) -> str:
+    """Drop free-floating result-note / None lines left between metric bullets."""
+    raw = text or ""
+    if not raw.strip():
+        return raw
+    lines = raw.replace("\r\n", "\n").split("\n")
+    kept: list[str] = []
+    after_metric_bullet = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            kept.append(line.rstrip())
+            continue
+        if _HEADING_LINE.match(stripped) or _is_markdown_table_row(line):
+            after_metric_bullet = False
+            kept.append(line.rstrip())
+            continue
+        bullet_m = re.match(r"^([ \t]*[-*•]\s+)(.*)$", line)
+        if bullet_m:
+            rest = bullet_m.group(2).strip()
+            if _NULLISH_NOTE.match(rest):
+                # Bare None/N/A bullets under Key results are noise.
+                continue
+            rest = _NULLISH_NOTE_TAIL.sub("", rest).rstrip(" \t-–—")
+            if not rest.strip():
+                continue
+            after_metric_bullet = bool(
+                _METRIC_BULLET_LINE.match(f"{bullet_m.group(1)}{rest}".strip())
+            )
+            kept.append(f"{bullet_m.group(1)}{rest}".rstrip())
+            continue
+        # Indented or plain orphan note under a metric bullet.
+        if after_metric_bullet:
+            continue
+        if _NULLISH_NOTE.match(stripped):
+            continue
+        kept.append(line.rstrip())
+        after_metric_bullet = False
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    if not out:
+        return out
+    return out + ("\n" if raw.endswith("\n") else "")
+
+
+def ensure_key_results_cover_metrics(body: str, results_context: str) -> str:
+    """Append any results-table metrics missing from the outline/draft body."""
+    raw = body or ""
+    metrics = extract_result_metrics(results_context)
+    if not raw.strip() or not metrics:
+        return raw
+    body_cmp = _norm_overlap_text(raw)
+    missing = [m for m in metrics if not _metric_covered_in_text(body_cmp, m)]
+    if not missing:
+        return raw
+
+    bullets: list[str] = []
+    for m in missing:
+        label = _humanize_metric_label(m["name"])
+        value = m["value"]
+        unit = (m.get("unit") or "").strip()
+        notes = (m.get("notes") or "").strip()
+        piece = f"- {label}: {value}"
+        if unit and not _NULLISH_NOTE.match(unit):
+            # Avoid duplicating % when value already includes it.
+            if not (unit.lower() in {"percent", "pct", "%"} and str(value).endswith("%")):
+                piece = f"{piece} {unit}"
+        if notes:
+            piece = f"{piece} ({notes})"
+        bullets.append(piece)
+
+    lines = raw.replace("\r\n", "\n").split("\n")
+    insert_at: int | None = None
+    section_end: int | None = None
+    i = 0
+    while i < len(lines):
+        heading = _HEADING_LINE.match(lines[i].strip())
+        if heading:
+            title_key = re.sub(r"[:.\d\s]+$", "", heading.group(2).strip().lower()).strip()
+            if title_key in _KEY_RESULTS_SECTIONS:
+                insert_at = i + 1
+                j = i + 1
+                while j < len(lines):
+                    if _HEADING_LINE.match(lines[j].strip()):
+                        break
+                    j += 1
+                section_end = j
+                break
+        i += 1
+
+    if insert_at is None:
+        # No Key results section — append one before Outlook/Summary if present.
+        append_at = len(lines)
+        for idx, line in enumerate(lines):
+            heading = _HEADING_LINE.match(line.strip())
+            if not heading:
+                continue
+            title_key = re.sub(r"[:.\d\s]+$", "", heading.group(2).strip().lower()).strip()
+            if title_key in _OPTIONAL_EMPTY_SECTIONS:
+                append_at = idx
+                break
+        block = ["## Key results", *bullets, ""]
+        lines = lines[:append_at] + block + lines[append_at:]
+    else:
+        # Insert before the next heading (end of Key results).
+        at = section_end if section_end is not None else insert_at
+        # Skip trailing blanks so bullets sit with the section body.
+        while at > insert_at and at > 0 and not lines[at - 1].strip():
+            at -= 1
+        lines = lines[:at] + bullets + lines[at:]
+
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     return out + ("\n" if raw.endswith("\n") else "")
 
 
@@ -763,7 +1125,12 @@ class ReportPipeline:
             self.pack.get("examples") or "",
             allowed=self._allowed_fact_text(),
         )
-        return sanitize_generated_markdown(cleaned)
+        cleaned = sanitize_generated_markdown(cleaned)
+        cleaned = strip_orphan_result_notes(cleaned)
+        cleaned = ensure_key_results_cover_metrics(
+            cleaned, self.pack.get("results_context") or ""
+        )
+        return cleaned
 
     def scrub_current_draft(self) -> tuple[str, list[str]]:
         """Re-apply example-bleed scrub to body_md (and outline) without regenerating."""
@@ -788,10 +1155,15 @@ class ReportPipeline:
         return scrubbed, phrases
 
     def _apply_style_notes(self, notes: str, key: str, *, from_cache: bool) -> str:
-        cleaned = sanitize_style_notes(notes, self.pack.get("examples") or "")
+        examples = self.pack.get("examples") or ""
+        cleaned = sanitize_style_notes(notes, examples)
         self.project.style_notes_md = cleaned
         self.project.style_notes_key = key
         self.db.commit()
+        if from_cache and cleaned.strip() != (notes or "").strip():
+            settings = get_settings()
+            settings.ensure_dirs()
+            save_style_notes(settings.style_cache_dir, key, cleaned)
         source = "cache" if from_cache else "llm"
         self._log_run("style_notes", "ok", f"[{source}] {cleaned[:1900]}")
         return cleaned
@@ -826,6 +1198,9 @@ class ReportPipeline:
             existing = (getattr(self.project, "style_notes_md", None) or "").strip()
             existing_key = getattr(self.project, "style_notes_key", None) or ""
             if existing and existing_key == key:
+                cleaned = sanitize_style_notes(existing, self.pack.get("examples") or "")
+                if cleaned.strip() != existing:
+                    return self._apply_style_notes(cleaned, key, from_cache=True)
                 return existing
             cached = load_style_notes(settings.style_cache_dir, key)
             if cached:
