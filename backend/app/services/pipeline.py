@@ -109,10 +109,11 @@ Key results (required when results_context has a metrics table):
 - Use one results heading only ("Key results" *or* "Key metrics", not both).
   Do not add a separate Summary that only restates the title/purpose.
 
-Outlook / next-steps bullets may only restate notes or constraints from
-results_context or the brief — never from examples. Do not reuse example
-openers, staffing/backlog/"planned bands" themes, or prior-period recommendations.
-If results/brief give no outlook content, omit Outlook or leave it empty.
+Outlook / next-steps bullets may only restate *notes* or constraints from
+results_context Notes cells or the brief — never from examples, and never from
+metric labels/values alone. Do not reuse example openers, staffing/backlog/
+"planned bands" themes, or prior-period recommendations.
+If Notes cells and the brief give no outlook content, omit Outlook entirely.
 Do not write the full report yet.
 Output only the Markdown outline — no preamble, no closing notes, and no
 commentary about what you omitted or alternative outlines."""
@@ -160,10 +161,10 @@ Language consistency (required when style notes are present):
   do not invent extra sections or duplicate headings.
 - Emit metrics under one heading only (Key results *or* Key metrics — never both);
   skip a Summary that only restates the title or "highlights KPIs" without findings.
-- If results/brief give no outlook content, keep Outlook empty or omit it — do not
-  borrow prior-period recommendations.
+- Outlook bullets must be grounded in result *Notes* or the brief (not metric
+  labels/values alone). If Notes/brief give no next-step content, omit Outlook.
 - Do not invent staffing, backlog-aging, capacity, or "planned bands" themes unless
-  those words appear in results_context or the brief.
+  those words appear in Notes or the brief.
 - Mentions of incidents or sweeps must stay faithful to result notes (no new causes).
 
 Be precise. Output only the report."""
@@ -189,13 +190,14 @@ List concrete issues in these categories:
    metric row omitted from Key results (MTTR, SLA, etc.)
 2. Example-bleed: sentences, openers, or outlook/next-step bullets that match
    prior-report examples or style-note quotations but are not supported by
-   results_context or the brief (flag even if stylistically fluent)
+   result Notes or the brief (flag even if stylistically fluent)
 3. Orphan result-note lines (notes not on the same bullet as their metric) or
    bare None/N/A note lines
 4. Structure mismatches with the brief
 5. Language / formulation drift from the style notes (wrong section naming, voice,
    terminology, metric phrasing, hedging, or closing *patterns* — not missing
    example-only facts)
+6. Outlook bullets not grounded in Notes/brief (omit Outlook if none qualify)
 
 Be terse. End with a short "revised priority fixes" list."""
 
@@ -221,8 +223,8 @@ REVISE_PROMPT = """Title: {title}
 Produce a revised Markdown report that addresses the critique while staying faithful
 to the results and brief. Keep house style (section names, tense, metric phrasing
 patterns) from the style notes, but remove or rewrite any claim, opener, or
-outlook/next-step bullet that is not grounded in results_context or the brief.
-Do not reintroduce example-only wording. If outlook has no support in results/brief,
+outlook/next-step bullet that is not grounded in result Notes or the brief.
+Do not reintroduce example-only wording. If Notes/brief give no outlook support,
 omit Outlook entirely. Output only the revised report."""
 
 
@@ -830,7 +832,113 @@ def _metric_covered_in_text(body_cmp: str, metric: dict[str, str]) -> bool:
     if not tokens:
         return True
     # Prefer acronyms / distinctive tokens (mttr, sla, tickets, …).
-    return any(tok in body_cmp for tok in tokens)
+    if any(tok in body_cmp for tok in tokens):
+        return True
+    name = (metric.get("name") or "").lower()
+    # Expanded labels without the acronym still count (avoid duplicate backfill).
+    if "mttr" in tokens or "mttr" in name:
+        if "mean" in body_cmp and "resolve" in body_cmp:
+            return True
+    if "sla" in tokens or "sla" in name:
+        if "sla" in body_cmp or (
+            "service" in body_cmp and "level" in body_cmp
+        ):
+            return True
+    if "ticket" in tokens and ("ticket" in body_cmp or "tickets" in body_cmp):
+        return True
+    return False
+
+
+def _key_results_section_text(body: str) -> str:
+    """Concatenate Key results / Key metrics / Results section bodies only."""
+    raw = body or ""
+    if not raw.strip():
+        return ""
+    lines = raw.replace("\r\n", "\n").split("\n")
+    chunks: list[str] = []
+    i = 0
+    while i < len(lines):
+        title_key = _section_title_key(lines[i])
+        if title_key in _KEY_RESULTS_SECTIONS:
+            j = i + 1
+            while j < len(lines) and not _HEADING_LINE.match(lines[j].strip()):
+                j += 1
+            chunks.append("\n".join(lines[i + 1 : j]))
+            i = j
+            continue
+        i += 1
+    return "\n".join(chunks)
+
+
+def _outlook_grounding_text(brief: str, results_context: str) -> str:
+    """Allowed Outlook sources: brief + non-empty result Notes (not bare metrics)."""
+    parts: list[str] = [(brief or "").strip()]
+    for row in extract_result_metrics(results_context):
+        notes = (row.get("notes") or "").strip()
+        if notes and not _NULLISH_NOTE.match(notes):
+            parts.append(notes)
+    # Free-text lines in results_context (outside tables) can also carry constraints.
+    for line in (results_context or "").replace("\r\n", "\n").split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if _is_markdown_table_row(line) or _is_markdown_table_separator(line):
+            continue
+        if stripped.startswith("|"):
+            continue
+        parts.append(stripped)
+    return "\n".join(p for p in parts if p)
+
+
+def strip_ungrounded_outlook(
+    text: str, *, brief: str, results_context: str
+) -> str:
+    """Keep Outlook bullets only when grounded in Notes/brief; else drop Outlook."""
+    raw = text or ""
+    if not raw.strip():
+        return raw
+    allowed_cmp = _norm_allowed_text(
+        _outlook_grounding_text(brief, results_context)
+    )
+    lines = raw.replace("\r\n", "\n").split("\n")
+    kept: list[str] = []
+    i = 0
+    while i < len(lines):
+        title_key = _section_title_key(lines[i])
+        if title_key != "outlook":
+            kept.append(lines[i])
+            i += 1
+            continue
+        heading = lines[i]
+        j = i + 1
+        while j < len(lines) and not _HEADING_LINE.match(lines[j].strip()):
+            j += 1
+        body_lines = lines[i + 1 : j]
+        grounded: list[str] = []
+        for line in body_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            bullet_m = re.match(r"^([ \t]*[-*•]\s+)(.*)$", line)
+            content = bullet_m.group(2).strip() if bullet_m else stripped
+            if not content or _NULLISH_NOTE.match(content):
+                continue
+            cand = _norm_claim_key(content)
+            if not cand:
+                continue
+            # Require real support in Notes/brief — not just shared stopwords.
+            if allowed_cmp and _supported_by_allowed(cand, allowed_cmp, min_ratio=0.55):
+                grounded.append(line.rstrip())
+        if grounded:
+            kept.append(heading.rstrip())
+            kept.extend(grounded)
+            kept.append("")
+        i = j
+        continue
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    if not out:
+        return out
+    return out + ("\n" if raw.endswith("\n") else "")
 
 
 def strip_orphan_result_notes(text: str) -> str:
@@ -878,13 +986,15 @@ def strip_orphan_result_notes(text: str) -> str:
 
 
 def ensure_key_results_cover_metrics(body: str, results_context: str) -> str:
-    """Append any results-table metrics missing from the outline/draft body."""
+    """Append results-table metrics missing from Key results (not body-wide)."""
     raw = body or ""
     metrics = extract_result_metrics(results_context)
     if not raw.strip() or not metrics:
         return raw
-    body_cmp = _norm_overlap_text(raw)
-    missing = [m for m in metrics if not _metric_covered_in_text(body_cmp, m)]
+    # Coverage must be under Key results / Key metrics / Results — a hit only in
+    # Summary or Executive overview still counts as missing.
+    section_cmp = _norm_overlap_text(_key_results_section_text(raw))
+    missing = [m for m in metrics if not _metric_covered_in_text(section_cmp, m)]
     if not missing:
         return raw
 
@@ -1216,6 +1326,12 @@ class ReportPipeline:
         cleaned = ensure_key_results_cover_metrics(
             cleaned, self.pack.get("results_context") or ""
         )
+        cleaned = strip_ungrounded_outlook(
+            cleaned,
+            brief=self.pack.get("brief") or "",
+            results_context=self.pack.get("results_context") or "",
+        )
+        cleaned = drop_empty_optional_sections(cleaned)
         return cleaned
 
     def scrub_current_draft(self) -> tuple[str, list[str]]:
