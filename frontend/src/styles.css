@@ -701,9 +701,11 @@ th {
 }
 
 .preview-panel .md-preview {
-  padding: var(--space-4);
+  padding: var(--preview-pad, var(--space-4));
   flex: 1 1 auto;
   min-height: 0;
+  font-family: var(--preview-body-font, var(--font-display));
+  font-size: var(--preview-body-size, 1.02rem);
 }
 
 .preview-chrome {
@@ -715,6 +717,7 @@ th {
   color: var(--ink-soft);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 55%, white);
+  flex-shrink: 0;
 }
 
 .preview-chrome-footer {
@@ -724,9 +727,18 @@ th {
 }
 
 .preview-logo {
-  max-height: 28px;
+  height: 28px;
+  width: auto;
   max-width: 120px;
   object-fit: contain;
+}
+
+.preview-theme-source {
+  margin: 0;
+  padding: 0.35rem var(--space-4) 0.55rem;
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  flex-shrink: 0;
 }
 
 .theme-summary .secondary {
@@ -747,8 +759,8 @@ th {
 }
 
 .md-preview {
-  font-family: var(--font-display);
-  font-size: 1.02rem;
+  font-family: var(--preview-body-font, var(--font-display));
+  font-size: var(--preview-body-size, 1.02rem);
   line-height: 1.55;
   color: var(--ink);
 }
@@ -762,9 +774,9 @@ th {
   margin: 1.1rem 0 0.55rem;
 }
 
-.md-preview h1 { font-size: 1.45rem; }
-.md-preview h2 { font-size: 1.2rem; }
-.md-preview h3 { font-size: 1.05rem; }
+.md-preview h1 { font-size: var(--preview-title-size, 1.45rem); }
+.md-preview h2 { font-size: var(--preview-heading-size, 1.2rem); }
+.md-preview h3 { font-size: calc(var(--preview-heading-size, 1.2rem) * 0.9); }
 
 .md-preview p {
   margin: 0 0 0.85rem;
@@ -1063,35 +1075,6 @@ tr.row-stub td {
 
 .md-format-bar .format-hint {
   margin-left: auto;
-}
-
-.preview-chrome {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--line);
-  color: var(--ink-soft);
-  font-size: 0.85rem;
-}
-
-.preview-chrome-footer {
-  border-bottom: none;
-  border-top: 1px solid var(--line);
-  margin-top: auto;
-}
-
-.preview-logo {
-  height: 28px;
-  width: auto;
-  object-fit: contain;
-}
-
-.md-preview h1,
-.md-preview h2,
-.md-preview h3,
-.md-preview h4 {
-  font-family: var(--preview-heading-font, var(--font-ui));
 }
 
 @media (max-width: 860px) {

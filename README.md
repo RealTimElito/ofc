@@ -88,7 +88,7 @@ For true air-gap: build on a connected host, `docker save` the images, transfer,
    call). The editor warns early if the configured LLM is unreachable or lists no models.
    If a draft still echoes example-only phrasing, use **Scrub example phrasing**
 4. Optionally **Import theme** from a `.docx` example or library doc (fonts, header/footer,
-   logos) for Word and HTML export
+   logos); live preview mirrors that chrome, and Word/HTML export apply it on download
 5. Edit the draft; export Markdown, HTML, or `.docx`
 
 ### Sample DB hints

@@ -97,8 +97,29 @@ function themeIsSet(theme: ReportTheme | undefined): boolean {
       theme.header_text ||
       theme.footer_text ||
       theme.header_logo ||
-      theme.footer_logo,
+      theme.footer_logo ||
+      theme.body_size_pt != null ||
+      theme.heading_size_pt != null ||
+      theme.title_size_pt != null ||
+      theme.margin_top_in != null ||
+      theme.margin_bottom_in != null ||
+      theme.margin_left_in != null ||
+      theme.margin_right_in != null,
   );
+}
+
+/** Match HTML export font stacks (browser may still substitute missing faces). */
+function cssFontStack(name: string | null | undefined, fallback: string): string {
+  if (!name) return fallback;
+  const safe = name.replace(/\\/g, "").replace(/"/g, "");
+  return `"${safe}", ${fallback}`;
+}
+
+function marginRem(inches: number | null | undefined, defaultRem: number): string {
+  if (inches == null) return `${defaultRem}rem`;
+  const n = Number(inches);
+  if (!Number.isFinite(n)) return `${defaultRem}rem`;
+  return `${Math.max(0.5, n * 1.1).toFixed(2)}rem`;
 }
 
 const FORMAT_ACTIONS: { action: MdAction; label: string; title: string }[] = [
@@ -618,12 +639,33 @@ export default function ReportEditorPage() {
   const allExampleCount = exampleOptions.length;
   const showEditor = bodyView === "edit" || bodyView === "split";
   const showPreview = previewOpen && (bodyView === "preview" || bodyView === "split");
-  const previewStyle: CSSProperties = {
-    ...(theme.body_font ? { fontFamily: `"${theme.body_font}", var(--font-display)` } : {}),
+  const themed = themeIsSet(theme);
+  const showHeaderChrome = Boolean(theme.header_text || theme.header_logo);
+  const showFooterChrome = Boolean(theme.footer_text || theme.footer_logo);
+  const previewPanelStyle: CSSProperties = {
+    ["--preview-body-font" as string]: cssFontStack(
+      theme.body_font,
+      "var(--font-display)",
+    ),
+    ["--preview-heading-font" as string]: cssFontStack(
+      theme.heading_font || theme.body_font,
+      "var(--font-ui)",
+    ),
+    ["--preview-body-size" as string]: theme.body_size_pt
+      ? `${theme.body_size_pt}pt`
+      : "1.02rem",
+    ["--preview-heading-size" as string]: theme.heading_size_pt
+      ? `${theme.heading_size_pt}pt`
+      : "1.2rem",
+    ["--preview-title-size" as string]: theme.title_size_pt
+      ? `${theme.title_size_pt}pt`
+      : "1.45rem",
+    ...(themed
+      ? {
+          ["--preview-pad" as string]: `${marginRem(theme.margin_top_in, 1)} ${marginRem(theme.margin_right_in, 1)} ${marginRem(theme.margin_bottom_in, 1)} ${marginRem(theme.margin_left_in, 1)}`,
+        }
+      : {}),
   };
-  const previewHeadingStyle: CSSProperties | undefined = theme.heading_font
-    ? ({ ["--preview-heading-font" as string]: `"${theme.heading_font}", var(--font-ui)` } as CSSProperties)
-    : undefined;
 
   return (
     <>
@@ -795,8 +837,9 @@ export default function ReportEditorPage() {
           <div className="panel">
             <h2>Visual theme</h2>
             <p className="field-hint">
-              Import fonts, header/footer text, and logos from a <code>.docx</code> example for
-              Word and HTML export (preview shows simplified chrome). Not a full Word clone.
+              Import fonts, sizes, margins, header/footer text, and logos from a{" "}
+              <code>.docx</code> example. Live preview mirrors that chrome for drafting;
+              Word/HTML export remain the fidelity target (not a full Word clone).
             </p>
             <div className="example-picker" ref={themePickerRef}>
               <div className="search-select">
@@ -1255,9 +1298,9 @@ export default function ReportEditorPage() {
                   <div
                     className="preview-panel resizable-pane"
                     title="Drag the bottom-right corner to resize"
-                    style={previewHeadingStyle}
+                    style={previewPanelStyle}
                   >
-                    {themeIsSet(theme) && (
+                    {showHeaderChrome && (
                       <div className="preview-chrome preview-chrome-header">
                         {theme.header_logo && (
                           <img
@@ -1271,10 +1314,9 @@ export default function ReportEditorPage() {
                     )}
                     <div
                       className="md-preview"
-                      style={previewStyle}
                       dangerouslySetInnerHTML={{ __html: previewHtml }}
                     />
-                    {themeIsSet(theme) && (theme.footer_text || theme.footer_logo) && (
+                    {showFooterChrome && (
                       <div className="preview-chrome preview-chrome-footer">
                         {theme.footer_logo && (
                           <img
@@ -1285,6 +1327,9 @@ export default function ReportEditorPage() {
                         )}
                         {theme.footer_text && <span>{theme.footer_text}</span>}
                       </div>
+                    )}
+                    {themed && theme.source_label && (
+                      <p className="preview-theme-source">Theme: {theme.source_label}</p>
                     )}
                     <div className="resize-grip" aria-hidden="true" />
                   </div>
